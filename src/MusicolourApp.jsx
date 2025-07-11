@@ -39,20 +39,23 @@ function PianoKey({ keyData, isPressed, onPress, onRelease }) {
       className={`
         piano-key cursor-pointer transition-all duration-75 select-none relative
         ${isBlack 
-          ? 'bg-gray-900 text-white h-20 w-6 mx-0 z-10 -ml-3 -mr-3' 
-          : 'bg-white text-gray-800 h-32 w-10 border border-gray-200'
+          ? 'bg-gray-900 text-white h-24 w-7 mx-0 z-10 -ml-3 -mr-3' 
+          : 'bg-white text-gray-800 h-36 w-11 border border-gray-300'
         }
         ${isPressed ? (isBlack ? 'bg-gray-700' : 'bg-gray-100') : ''}
         hover:${isBlack ? 'bg-gray-700' : 'bg-gray-50'}
         flex flex-col justify-end items-center pb-2
-        shadow-md hover:shadow-lg
+        shadow-lg hover:shadow-xl
       `}
       onMouseDown={onPress}
       onMouseUp={onRelease}
       onMouseLeave={onRelease}
       style={{
         borderBottomColor: keyData.color,
-        borderBottomWidth: isPressed ? '4px' : '2px'
+        borderBottomWidth: isPressed ? '6px' : '3px',
+        boxShadow: isBlack 
+          ? '0 4px 12px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)'
+          : '0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.8)'
       }}
     >
       <div className="text-xs font-mono opacity-70">
@@ -65,10 +68,80 @@ function PianoKey({ keyData, isPressed, onPress, onRelease }) {
   );
 }
 
+// Thermometer Power Bar Component
+function PowerBar({ excitement = 0 }) {
+  const getMoodData = (excitementLevel) => {
+    if (excitementLevel > 0.7) {
+      return { color: '#ff6b6b', label: 'EXCITED' };
+    } else if (excitementLevel < 0.2) {
+      return { color: '#6c757d', label: 'BORED' };
+    } else {
+      return { color: '#4ecdc4', label: 'NEUTRAL' };
+    }
+  };
+
+  const moodData = getMoodData(excitement);
+  const fillHeight = Math.max(5, excitement * 95); // 5% minimum, 95% max
+
+  return (
+    <div className="fixed left-6 top-1/2 transform -translate-y-1/2 z-20">
+      <div className="text-white text-xs font-mono mb-2 text-center opacity-70">
+        SYSTEM
+      </div>
+      
+      {/* Thermometer container */}
+      <div className="relative w-6 h-64 bg-black bg-opacity-30 rounded-full border border-white border-opacity-20 overflow-hidden">
+        {/* Background grid */}
+        <div className="absolute inset-0">
+          {[...Array(8)].map((_, i) => (
+            <div
+              key={i}
+              className="absolute left-0 right-0 h-px bg-white opacity-10"
+              style={{ top: `${i * 12.5}%` }}
+            />
+          ))}
+        </div>
+        
+        {/* Fill */}
+        <div
+          className="absolute bottom-0 left-0 right-0 transition-all duration-1000 ease-out rounded-full"
+          style={{
+            height: `${fillHeight}%`,
+            backgroundColor: moodData.color,
+            boxShadow: `0 0 20px ${moodData.color}40`
+          }}
+        />
+        
+        {/* Glow effect */}
+        <div
+          className="absolute bottom-0 left-0 right-0 opacity-60 rounded-full blur-sm"
+          style={{
+            height: `${fillHeight}%`,
+            backgroundColor: moodData.color
+          }}
+        />
+      </div>
+      
+      {/* Label */}
+      <div 
+        className="text-xs font-mono mt-2 text-center transition-colors duration-1000"
+        style={{ color: moodData.color }}
+      >
+        {moodData.label}
+      </div>
+    </div>
+  );
+}
+
 function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
   return (
-    <div className="piano-container flex justify-center items-end bg-gradient-to-t from-gray-800 to-gray-700 p-4 rounded-lg shadow-xl">
-      <div className="flex relative">
+    <div className="piano-container flex justify-center items-end bg-gradient-to-t from-gray-900 to-gray-800 p-6 rounded-lg shadow-2xl border border-gray-600" style={{
+      boxShadow: '0 10px 40px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)'
+    }}>
+      <div className="flex relative" style={{
+        transform: 'perspective(800px) rotateX(5deg)',
+        transformStyle: 'preserve-3d'
+      }}>
         {PIANO_KEYS.filter(k => k.type === 'white').map((key, index) => (
           <PianoKey
             key={key.note}
@@ -83,7 +156,7 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
             const whiteKeyIndex = PIANO_KEYS.filter(k => k.type === 'white').findIndex(wk => 
               PIANO_KEYS.indexOf(wk) < PIANO_KEYS.indexOf(key)
             );
-            const offset = (whiteKeyIndex + 1) * 40 - 12; // 40px = white key width, adjust for black key positioning
+            const offset = (whiteKeyIndex + 1) * 44 - 14; // 44px = white key width, adjust for black key positioning
             
             return (
               <div
@@ -203,9 +276,11 @@ function MusicolourApp() {
   const [pressedKeys, setPressedKeys] = useState(new Set());
   const [activeEffects, setActiveEffects] = useState([]);
   const [systemState, setSystemState] = useState({
-    mood: 'neutral',
-    recentNotes: [],
-    boredomCounters: {}
+    excitement: 0, // 0 to 1 scale
+    lastNoteIndex: null,
+    lastKeyPressTime: null,
+    keyRepetitionCounters: {}, // Track repetition per key
+    currentRepetitionFactor: 1.0 // Multiplication factor for current key
   });
 
   const pianoRef = useRef(null);
@@ -266,25 +341,100 @@ function MusicolourApp() {
     };
   }, [pressedKeys]);
 
-  const updateSystemMood = useCallback((note) => {
-    setSystemState(prev => {
-      const newRecentNotes = [...prev.recentNotes, note].slice(-10);
-      const uniqueNotes = new Set(newRecentNotes);
-      const repetitionRatio = newRecentNotes.length / uniqueNotes.size;
-      
-      let newMood = 'neutral';
-      if (repetitionRatio > 3) {
-        newMood = 'bored';
-      } else if (uniqueNotes.size > 5) {
-        newMood = 'excited';
-      }
+  // Calculate base excitement increase based on note distance
+  const calculateBaseExcitementIncrease = useCallback((currentNoteIndex, lastNoteIndex) => {
+    if (lastNoteIndex === null) return 0.3; // Base excitement for first note
+    
+    const distance = Math.abs(currentNoteIndex - lastNoteIndex);
+    // Excitement factor f(distance) - exponential increase with distance
+    const maxDistance = PIANO_KEYS.length - 1;
+    const normalizedDistance = distance / maxDistance;
+    
+    // f(a) = base + (max - base) * (1 - e^(-k*distance))
+    const base = 0.1;
+    const max = 0.8;
+    const k = 3; // Controls how quickly excitement increases
+    
+    return base + (max - base) * (1 - Math.exp(-k * normalizedDistance));
+  }, []);
 
+  // Calculate distance-based multiplication factor
+  const calculateDistanceMultiplier = useCallback((currentNoteIndex, lastNoteIndex) => {
+    if (lastNoteIndex === null) return 1.0;
+    
+    const distance = Math.abs(currentNoteIndex - lastNoteIndex);
+    const maxDistance = PIANO_KEYS.length - 1;
+    
+    // Distance multiplier: close notes get lower multiplier
+    // Adjacent keys (distance=1) get ~0.5, far keys get ~0.9
+    const normalizedDistance = distance / maxDistance;
+    return 0.3 + 0.6 * normalizedDistance; // Range from 0.3 to 0.9
+  }, []);
+
+  const updateSystemExcitement = useCallback((noteIndex) => {
+    setSystemState(prev => {
+      const baseIncrease = calculateBaseExcitementIncrease(noteIndex, prev.lastNoteIndex);
+      const distanceMultiplier = calculateDistanceMultiplier(noteIndex, prev.lastNoteIndex);
+      
+      // Check if we're repeating the same key
+      const isSameKey = prev.lastNoteIndex === noteIndex;
+      let newRepetitionFactor;
+      let newRepetitionCounters = { ...prev.keyRepetitionCounters };
+      
+      if (isSameKey) {
+        // Same key: compound the repetition factor
+        const alpha = distanceMultiplier; // Use same multiplier as alpha
+        newRepetitionFactor = prev.currentRepetitionFactor * alpha;
+        newRepetitionCounters[noteIndex] = (newRepetitionCounters[noteIndex] || 0) + 1;
+      } else {
+        // Different key: reset repetition factor to distance multiplier
+        newRepetitionFactor = distanceMultiplier;
+        // Reset counter for previous key
+        if (prev.lastNoteIndex !== null) {
+          newRepetitionCounters[prev.lastNoteIndex] = 0;
+        }
+        newRepetitionCounters[noteIndex] = 1;
+      }
+      
+      // Apply both distance and repetition penalties
+      const finalIncrease = baseIncrease * newRepetitionFactor;
+      const newExcitement = Math.min(1, prev.excitement + finalIncrease);
+      
       return {
         ...prev,
-        mood: newMood,
-        recentNotes: newRecentNotes
+        excitement: newExcitement,
+        lastNoteIndex: noteIndex,
+        lastKeyPressTime: Date.now(),
+        keyRepetitionCounters: newRepetitionCounters,
+        currentRepetitionFactor: newRepetitionFactor
       };
     });
+  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier]);
+
+  // Constant boredom decay system (5 seconds from max to 0)
+  useEffect(() => {
+    const decayInterval = setInterval(() => {
+      setSystemState(prev => {
+        // Decay rate: 1.0 excitement level in 5000ms = 0.2 per second = 0.0033 per 16.67ms
+        const decayRate = 0.2 / 60; // 60fps decay rate
+        const newExcitement = Math.max(0, prev.excitement - decayRate);
+        
+        // Reset repetition factor gradually when no keys are pressed
+        const timeSinceLastKey = Date.now() - (prev.lastKeyPressTime || 0);
+        let newRepetitionFactor = prev.currentRepetitionFactor;
+        if (timeSinceLastKey > 1000) { // After 1 second of no input
+          newRepetitionFactor = Math.min(1.0, newRepetitionFactor + 0.01); // Gradual recovery
+        }
+        
+        return {
+          ...prev,
+          excitement: newExcitement,
+          currentRepetitionFactor: newRepetitionFactor
+        };
+      });
+    }, 16); // ~60fps for smooth decay
+
+    return () => clearInterval(decayInterval);
   }, []);
 
   const handleKeyPress = useCallback((key) => {
@@ -296,14 +446,19 @@ function MusicolourApp() {
       pianoRef.current.triggerAttack(key.note);
     }
 
-    // Create visual effect
+    // Create visual effect with wider spread and random positioning
     const noteIndex = PIANO_KEYS.findIndex(k => k.note === key.note);
-    const intensity = systemState.mood === 'bored' ? 0.3 : 1.0;
+    const intensity = 0.3 + (systemState.excitement * 0.7); // Scale with excitement
+    
+    // Create multiple effects for richer visuals
+    const baseX = (noteIndex - 8) * 1.2; // Wider spread
+    const randomOffset = (Math.random() - 0.5) * 4; // Random positioning
+    const randomY = (Math.random() - 0.5) * 3;
     
     const newEffect = {
       id: Date.now() + Math.random(),
       type: 'ripple',
-      position: [(noteIndex - 8) * 0.5, 0, 0],
+      position: [baseX + randomOffset, randomY, (Math.random() - 0.5) * 2],
       color: key.color,
       intensity,
       note: key.note,
@@ -311,13 +466,13 @@ function MusicolourApp() {
     };
 
     setActiveEffects(prev => [...prev, newEffect]);
-    updateSystemMood(key.note);
+    updateSystemExcitement(noteIndex);
 
     // Auto-release after timeout if not manually released
     keyTimeouts.current.set(key.note, setTimeout(() => {
       handleKeyRelease(key);
     }, 500));
-  }, [pressedKeys, systemState.mood, updateSystemMood]);
+  }, [pressedKeys, systemState.excitement, updateSystemExcitement]);
 
   const handleKeyRelease = useCallback((key) => {
     setPressedKeys(prev => {
@@ -348,27 +503,27 @@ function MusicolourApp() {
     return () => clearInterval(interval);
   }, []);
 
-  const getMoodColor = () => {
-    switch (systemState.mood) {
-      case 'excited': return '#ff6b6b';
-      case 'bored': return '#6c757d';
-      default: return '#4ecdc4';
+  const getMoodData = () => {
+    const excitement = systemState.excitement;
+    
+    if (excitement > 0.7) {
+      return { color: '#ff6b6b', mood: 'excited' };
+    } else if (excitement < 0.2) {
+      return { color: '#6c757d', mood: 'bored' };
+    } else {
+      return { color: '#4ecdc4', mood: 'neutral' };
     }
   };
 
   return (
-    <div className="w-full h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 overflow-hidden relative">
+    <div className="w-full h-screen bg-black overflow-hidden relative">
       {/* Header */}
-      <div className="absolute top-6 left-6 z-10 text-white">
+      <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-bold mb-2">Musicolour</h1>
-        <div className="flex items-center gap-2">
-          <div 
-            className="w-3 h-3 rounded-full transition-colors duration-1000"
-            style={{ backgroundColor: getMoodColor() }}
-          />
-          <span className="text-sm opacity-75">System: {systemState.mood}</span>
-        </div>
       </div>
+      
+      {/* Power Bar */}
+      <PowerBar excitement={systemState.excitement} />
 
       {/* Instructions */}
       <div className="absolute top-6 right-6 z-10 text-white text-right">
@@ -376,6 +531,9 @@ function MusicolourApp() {
           <div>Play the piano to create visual music</div>
           <div>Use keyboard: Q-P (white keys), 2-0 (black keys)</div>
           <div>System adapts to your musical patterns</div>
+          <div className="text-xs opacity-50 mt-2">
+            Repetition Factor: {systemState.currentRepetitionFactor.toFixed(3)}
+          </div>
         </div>
       </div>
 
@@ -426,11 +584,11 @@ function MusicolourApp() {
           <Text
             position={[0, -1, 0]}
             fontSize={0.3}
-            color={getMoodColor()}
+            color={getMoodData().color}
             anchorX="center"
             anchorY="middle"
           >
-            {pressedKeys.size > 0 ? '♪ Playing ♪' : '♪ Ready ♪'}
+            {pressedKeys.size > 0 ? '♪ Playing ♪' : `♪ ${getMoodData().mood.toUpperCase()} ♪`}
           </Text>
 
           <OrbitControls enableZoom={false} enablePan={false} />
