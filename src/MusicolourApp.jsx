@@ -7,6 +7,37 @@ import * as Tone from 'tone';
 // Initialize Tone.js
 Tone.start();
 
+// Regional repetition tracking helpers
+const getKeyRegion = (keyIndex) => {
+  // Divide 17 keys into overlapping regions of ~4 keys each
+  return Math.floor(keyIndex / 3); // Creates regions: 0-2=0, 3-5=1, 6-8=2, etc.
+};
+
+const getInfluencedRegions = (keyIndex) => {
+  // A key influences its own region and adjacent regions
+  const baseRegion = getKeyRegion(keyIndex);
+  const regions = [];
+  for (let r = baseRegion - 1; r <= baseRegion + 1; r++) {
+    if (r >= 0 && r <= Math.floor((PIANO_KEYS.length - 1) / 3)) {
+      regions.push(r);
+    }
+  }
+  return regions;
+};
+
+const getRegionalHeat = (regionCounters, keyIndex) => {
+  // Sum up repetition counts from all regions this key influences
+  const influencedRegions = getInfluencedRegions(keyIndex);
+  return influencedRegions.reduce((total, region) => {
+    return total + (regionCounters[region] || 0);
+  }, 0);
+};
+
+const isDistantRegion = (region1, region2, threshold = 2) => {
+  // Check if two regions are far enough apart to reset penalties
+  return region1 === null || Math.abs(region1 - region2) >= threshold;
+};
+
 // Piano key data
 const PIANO_KEYS = [
   // Octave 4
@@ -85,19 +116,15 @@ function PowerBar({ excitement = 0 }) {
 
   return (
     <div className="fixed left-6 top-1/2 transform -translate-y-1/2 z-20">
-      <div className="text-white text-xs font-mono mb-2 text-center opacity-70">
-        SYSTEM
-      </div>
-      
-      {/* Thermometer container */}
-      <div className="relative w-6 h-64 bg-black bg-opacity-30 rounded-full border border-white border-opacity-20 overflow-hidden">
+      {/* Thermometer container - 35% taller */}
+      <div className="relative w-8 h-80 bg-black bg-opacity-30 rounded-full border border-white border-opacity-20 overflow-hidden shadow-lg">
         {/* Background grid */}
         <div className="absolute inset-0">
-          {[...Array(8)].map((_, i) => (
+          {[...Array(10)].map((_, i) => (
             <div
               key={i}
               className="absolute left-0 right-0 h-px bg-white opacity-10"
-              style={{ top: `${i * 12.5}%` }}
+              style={{ top: `${i * 10}%` }}
             />
           ))}
         </div>
@@ -279,8 +306,9 @@ function MusicolourApp() {
     excitement: 0, // 0 to 1 scale
     lastNoteIndex: null,
     lastKeyPressTime: null,
-    keyRepetitionCounters: {}, // Track repetition per key
-    currentRepetitionFactor: 1.0 // Multiplication factor for current key
+    regionRepetitionCounters: {}, // Track repetition per region
+    currentRepetitionFactor: 1.0, // Multiplication factor for current region
+    lastRegion: null // Track which region was last played
   });
 
   const pianoRef = useRef(null);
@@ -343,7 +371,7 @@ function MusicolourApp() {
 
   // Calculate base excitement increase based on note distance
   const calculateBaseExcitementIncrease = useCallback((currentNoteIndex, lastNoteIndex) => {
-    if (lastNoteIndex === null) return 0.3; // Base excitement for first note
+    if (lastNoteIndex === null) return 0.06; // 1/5 of original 0.3
     
     const distance = Math.abs(currentNoteIndex - lastNoteIndex);
     // Excitement factor f(distance) - exponential increase with distance
@@ -351,8 +379,8 @@ function MusicolourApp() {
     const normalizedDistance = distance / maxDistance;
     
     // f(a) = base + (max - base) * (1 - e^(-k*distance))
-    const base = 0.1;
-    const max = 0.8;
+    const base = 0.02; // 1/5 of original 0.1
+    const max = 0.16;  // 1/5 of original 0.8
     const k = 3; // Controls how quickly excitement increases
     
     return base + (max - base) * (1 - Math.exp(-k * normalizedDistance));
@@ -365,10 +393,10 @@ function MusicolourApp() {
     const distance = Math.abs(currentNoteIndex - lastNoteIndex);
     const maxDistance = PIANO_KEYS.length - 1;
     
-    // Distance multiplier: close notes get lower multiplier
-    // Adjacent keys (distance=1) get ~0.5, far keys get ~0.9
+    // Distance multiplier: close notes get much gentler penalty
+    // Adjacent keys (distance=1) get ~0.75, far keys get ~0.95
     const normalizedDistance = distance / maxDistance;
-    return 0.3 + 0.6 * normalizedDistance; // Range from 0.3 to 0.9
+    return 0.7 + 0.25 * normalizedDistance; // Range from 0.7 to 0.95 (much gentler)
   }, []);
 
   const updateSystemExcitement = useCallback((noteIndex) => {
@@ -376,27 +404,41 @@ function MusicolourApp() {
       const baseIncrease = calculateBaseExcitementIncrease(noteIndex, prev.lastNoteIndex);
       const distanceMultiplier = calculateDistanceMultiplier(noteIndex, prev.lastNoteIndex);
       
-      // Check if we're repeating the same key
-      const isSameKey = prev.lastNoteIndex === noteIndex;
-      let newRepetitionFactor;
-      let newRepetitionCounters = { ...prev.keyRepetitionCounters };
+      // Get current region and check regional repetition
+      const currentRegion = getKeyRegion(noteIndex);
+      const influencedRegions = getInfluencedRegions(noteIndex);
+      const regionalHeat = getRegionalHeat(prev.regionRepetitionCounters, noteIndex);
       
-      if (isSameKey) {
-        // Same key: compound the repetition factor
-        const alpha = distanceMultiplier; // Use same multiplier as alpha
+      // Check if we're staying in the same region cluster
+      const isStayingInRegion = !isDistantRegion(prev.lastRegion, currentRegion);
+      let newRepetitionFactor;
+      let newRegionCounters = { ...prev.regionRepetitionCounters };
+      
+      if (isStayingInRegion && regionalHeat > 0) {
+        // Staying in same region: compound the repetition factor based on regional heat
+        const alpha = Math.max(0.3, distanceMultiplier - (regionalHeat * 0.1)); // Heat reduces alpha
         newRepetitionFactor = prev.currentRepetitionFactor * alpha;
-        newRepetitionCounters[noteIndex] = (newRepetitionCounters[noteIndex] || 0) + 1;
+        
+        // Increase heat for all influenced regions
+        influencedRegions.forEach(region => {
+          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1;
+        });
       } else {
-        // Different key: reset repetition factor to distance multiplier
+        // Moving to distant region: reset repetition factor
         newRepetitionFactor = distanceMultiplier;
-        // Reset counter for previous key
-        if (prev.lastNoteIndex !== null) {
-          newRepetitionCounters[prev.lastNoteIndex] = 0;
-        }
-        newRepetitionCounters[noteIndex] = 1;
+        
+        // Decay heat in old regions, start new heat in current regions
+        Object.keys(newRegionCounters).forEach(region => {
+          newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 2);
+        });
+        
+        // Start fresh heat in new regions
+        influencedRegions.forEach(region => {
+          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1;
+        });
       }
       
-      // Apply both distance and repetition penalties
+      // Apply both distance and regional repetition penalties
       const finalIncrease = baseIncrease * newRepetitionFactor;
       const newExcitement = Math.min(1, prev.excitement + finalIncrease);
       
@@ -405,8 +447,9 @@ function MusicolourApp() {
         excitement: newExcitement,
         lastNoteIndex: noteIndex,
         lastKeyPressTime: Date.now(),
-        keyRepetitionCounters: newRepetitionCounters,
-        currentRepetitionFactor: newRepetitionFactor
+        regionRepetitionCounters: newRegionCounters,
+        currentRepetitionFactor: newRepetitionFactor,
+        lastRegion: currentRegion
       };
     });
   }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier]);
@@ -419,17 +462,25 @@ function MusicolourApp() {
         const decayRate = 0.2 / 60; // 60fps decay rate
         const newExcitement = Math.max(0, prev.excitement - decayRate);
         
-        // Reset repetition factor gradually when no keys are pressed
+        // Reset repetition factor and cool down regional heat when no keys are pressed
         const timeSinceLastKey = Date.now() - (prev.lastKeyPressTime || 0);
         let newRepetitionFactor = prev.currentRepetitionFactor;
+        let newRegionCounters = { ...prev.regionRepetitionCounters };
+        
         if (timeSinceLastKey > 1000) { // After 1 second of no input
           newRepetitionFactor = Math.min(1.0, newRepetitionFactor + 0.01); // Gradual recovery
+          
+          // Cool down regional heat gradually
+          Object.keys(newRegionCounters).forEach(region => {
+            newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.02);
+          });
         }
         
         return {
           ...prev,
           excitement: newExcitement,
-          currentRepetitionFactor: newRepetitionFactor
+          currentRepetitionFactor: newRepetitionFactor,
+          regionRepetitionCounters: newRegionCounters
         };
       });
     }, 16); // ~60fps for smooth decay
@@ -531,8 +582,12 @@ function MusicolourApp() {
           <div>Play the piano to create visual music</div>
           <div>Use keyboard: Q-P (white keys), 2-0 (black keys)</div>
           <div>System adapts to your musical patterns</div>
-          <div className="text-xs opacity-50 mt-2">
-            Repetition Factor: {systemState.currentRepetitionFactor.toFixed(3)}
+          <div className="text-xs opacity-50 mt-2 space-y-1">
+            <div>Repetition Factor: {systemState.currentRepetitionFactor.toFixed(3)}</div>
+            <div>Current Region: {systemState.lastRegion !== null ? systemState.lastRegion : 'None'}</div>
+            <div>Regional Heat: {systemState.lastRegion !== null ? 
+              getRegionalHeat(systemState.regionRepetitionCounters, systemState.lastNoteIndex || 0).toFixed(1) : '0.0'
+            }</div>
           </div>
         </div>
       </div>
