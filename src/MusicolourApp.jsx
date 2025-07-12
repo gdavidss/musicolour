@@ -33,6 +33,90 @@ const getRegionalHeat = (regionCounters, keyIndex) => {
   }, 0);
 };
 
+// Pask's Adaptive Band-Pass Filter
+class AdaptiveBandPassFilter {
+  constructor(centerFreq, bandwidth = 0.5) {
+    this.centerFreq = centerFreq; // MIDI note number
+    this.bandwidth = bandwidth; // octaves
+    this.lastRetune = Date.now();
+    this.retuneHistory = [];
+  }
+
+  // Calculate filter response with overlapping skirts
+  getResponse(inputFreq) {
+    const freqDistance = Math.abs(inputFreq - this.centerFreq);
+    const normalizedDistance = freqDistance / this.bandwidth;
+    
+    // Gaussian-like response with overlapping skirts (~½ octave each side)
+    return Math.exp(-0.5 * Math.pow(normalizedDistance, 2));
+  }
+
+  // Retune filter based on novelty competition
+  retune(targetFreq, maxShift = 2) {
+    const shift = Math.min(maxShift, Math.abs(targetFreq - this.centerFreq));
+    const direction = targetFreq > this.centerFreq ? 1 : -1;
+    
+    this.centerFreq += direction * shift * 0.1; // Gradual retuning
+    this.centerFreq = Math.max(0, Math.min(127, this.centerFreq)); // MIDI range
+    
+    this.retuneHistory.push({
+      timestamp: Date.now(),
+      oldFreq: this.centerFreq - direction * shift * 0.1,
+      newFreq: this.centerFreq
+    });
+    
+    this.lastRetune = Date.now();
+  }
+}
+
+// Pask's Adaptive Threshold Units (A-T cells)
+class AdaptiveThresholdCell {
+  constructor(id, initialThreshold = 0.5) {
+    this.id = id;
+    this.threshold = initialThreshold;
+    this.envelope = 0;
+    this.lastFiring = 0;
+    this.tau = 1000; // Time constant for threshold integration (ms)
+    this.k = 0.8; // Gain factor
+    this.lastUpdateTime = Date.now();
+    this.filter = new AdaptiveBandPassFilter(id * 7 + 60); // Spread filters across frequency range
+  }
+
+  // Threshold integrator: τ(dT/dt) = k[E(t) - T(t)]
+  updateThreshold(envelopeValue) {
+    const now = Date.now();
+    const dt = (now - this.lastUpdateTime) / 1000; // Convert to seconds
+    
+    if (dt > 0) {
+      const dT_dt = this.k * (envelopeValue - this.threshold);
+      this.threshold += (dT_dt * dt) / (this.tau / 1000);
+      this.threshold = Math.max(0.1, Math.min(1.0, this.threshold)); // Clamp
+    }
+    
+    this.envelope = envelopeValue;
+    this.lastUpdateTime = now;
+  }
+
+  // Check if cell fires (envelope exceeds adaptive threshold)
+  checkFiring() {
+    const fires = this.envelope > this.threshold;
+    if (fires) {
+      this.lastFiring = Date.now();
+    }
+    return fires;
+  }
+
+  // Get 1-bit output
+  getBitOutput() {
+    return this.checkFiring() ? 1 : 0;
+  }
+
+  // Get time since last firing (for boredom calculation)
+  getTimeSinceLastFiring() {
+    return Date.now() - this.lastFiring;
+  }
+}
+
 const isDistantRegion = (region1, region2, threshold = 2) => {
   // Check if two regions are far enough apart to reset penalties
   return region1 === null || Math.abs(region1 - region2) >= threshold;
@@ -89,10 +173,10 @@ function PianoKey({ keyData, isPressed, onPress, onRelease }) {
           : '0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.8)'
       }}
     >
-      <div className="text-xs font-mono opacity-70">
+      <div className="text-xs font-mono opacity-70 font-black">
         {keyData.note}
       </div>
-      <div className="text-xs opacity-50">
+      <div className="text-xs opacity-50 font-bold">
         {keyData.keyCode.replace('Key', '').replace('Digit', '')}
       </div>
     </div>
@@ -151,8 +235,8 @@ function PowerBar({ excitement = 0 }) {
       
       {/* Label */}
       <div 
-        className="text-xs font-mono mt-2 text-center transition-colors duration-1000"
-        style={{ color: moodData.color }}
+        className="text-xs font-mono mt-2 text-center transition-colors duration-1000 font-black tracking-wide"
+        style={{ color: moodData.color, fontWeight: 900 }}
       >
         {moodData.label}
       </div>
@@ -302,13 +386,38 @@ function NoteParticles({ note, color, position }) {
 function MusicolourApp() {
   const [pressedKeys, setPressedKeys] = useState(new Set());
   const [activeEffects, setActiveEffects] = useState([]);
+  
+  // Initialize Pask's adaptive system
+  const [adaptiveSystem] = useState(() => {
+    const cells = {};
+    PIANO_KEYS.forEach((key, index) => {
+      cells[index] = new AdaptiveThresholdCell(index, 0.3 + Math.random() * 0.2);
+    });
+    return {
+      cells,
+      noveltyScores: {},
+      lastWheelPosition: 0,
+      boredomBias: 0,
+      colorWheelMappings: {}, // Dynamic color mappings
+      wheelUsageHistory: new Array(8).fill(0), // Track wheel position usage
+    };
+  });
+  
   const [systemState, setSystemState] = useState({
     excitement: 0, // 0 to 1 scale
     lastNoteIndex: null,
     lastKeyPressTime: null,
     regionRepetitionCounters: {}, // Track repetition per region
     currentRepetitionFactor: 1.0, // Multiplication factor for current region
-    lastRegion: null // Track which region was last played
+    lastRegion: null, // Track which region was last played
+    adaptiveThresholds: {}, // Store current adaptive thresholds
+    noveltyEngine: {
+      activeCell: null,
+      maxNoveltyScore: 0,
+      wheelPosition: 0
+    },
+    recentNotes: [], // Track recent note sequence for pattern detection
+    patternBoredom: 0 // Track boredom from repetitive patterns
   });
 
   const pianoRef = useRef(null);
@@ -369,21 +478,54 @@ function MusicolourApp() {
     };
   }, [pressedKeys]);
 
-  // Calculate base excitement increase based on note distance
-  const calculateBaseExcitementIncrease = useCallback((currentNoteIndex, lastNoteIndex) => {
-    if (lastNoteIndex === null) return 0.06; // 1/5 of original 0.3
+  // Pask's Novelty Engine - calculates novelty scores for each cell
+  const calculateNoveltyScores = useCallback((triggeredCellIndex, envelopeValue) => {
+    const scores = {};
+    const K = PIANO_KEYS.length - 1; // Number of other cells
+    const lambda = 0.0001; // Penalty factor for recent usage
     
+    PIANO_KEYS.forEach((_, i) => {
+      const cell = adaptiveSystem.cells[i];
+      
+      // Update cell threshold based on current envelope
+      const normalizedEnvelope = i === triggeredCellIndex ? envelopeValue : 0;
+      cell.updateThreshold(normalizedEnvelope);
+      
+      // Calculate novelty score: N_i(t) = (1/K)Σ|b_i(t) - b_j(t)| - λ(t - t_last_i)
+      let differenceSum = 0;
+      const currentBit = cell.getBitOutput();
+      
+      // Sum differences with all other cells
+      PIANO_KEYS.forEach((_, j) => {
+        if (i !== j) {
+          const otherBit = adaptiveSystem.cells[j].getBitOutput();
+          differenceSum += Math.abs(currentBit - otherBit);
+        }
+      });
+      
+      const avgDifference = differenceSum / K;
+      const timePenalty = lambda * cell.getTimeSinceLastFiring();
+      
+      scores[i] = avgDifference - timePenalty;
+    });
+    
+    return scores;
+  }, [adaptiveSystem]);
+
+  // Calculate base excitement increase based on novelty
+  const calculateBaseExcitementIncrease = useCallback((currentNoteIndex, lastNoteIndex, noveltyScore) => {
+    if (lastNoteIndex === null) return 0.08; // Moderate initial excitement
+    
+    // Base excitement now influenced by novelty score
     const distance = Math.abs(currentNoteIndex - lastNoteIndex);
-    // Excitement factor f(distance) - exponential increase with distance
     const maxDistance = PIANO_KEYS.length - 1;
     const normalizedDistance = distance / maxDistance;
     
-    // f(a) = base + (max - base) * (1 - e^(-k*distance))
-    const base = 0.02; // 1/5 of original 0.1
-    const max = 0.16;  // 1/5 of original 0.8
-    const k = 3; // Controls how quickly excitement increases
+    // Combine distance-based excitement with novelty - balanced gains
+    const distanceExcitement = 0.04 + 0.15 * (1 - Math.exp(-3 * normalizedDistance)); // Moderate gains
+    const noveltyMultiplier = 1 + Math.max(0, noveltyScore) * 1.5; // Moderate novelty amplification
     
-    return base + (max - base) * (1 - Math.exp(-k * normalizedDistance));
+    return distanceExcitement * noveltyMultiplier;
   }, []);
 
   // Calculate distance-based multiplication factor
@@ -399,48 +541,138 @@ function MusicolourApp() {
     return 0.7 + 0.25 * normalizedDistance; // Range from 0.7 to 0.95 (much gentler)
   }, []);
 
-  const updateSystemExcitement = useCallback((noteIndex) => {
+  // Detect repetitive patterns in note sequences
+  const detectPatternBoredom = useCallback((noteIndex, recentNotes) => {
+    const newRecentNotes = [...recentNotes, noteIndex].slice(-8); // Keep last 8 notes
+    
+    // Check for repeating patterns
+    let patternScore = 0;
+    
+    // Check for simple alternating patterns (A-B-A-B)
+    if (newRecentNotes.length >= 4) {
+      const last4 = newRecentNotes.slice(-4);
+      if (last4[0] === last4[2] && last4[1] === last4[3] && last4[0] !== last4[1]) {
+        patternScore += 0.3; // QWE-type patterns
+      }
+    }
+    
+    // Check for sequential runs (1-2-3-1-2-3)
+    if (newRecentNotes.length >= 6) {
+      const last6 = newRecentNotes.slice(-6);
+      const first3 = last6.slice(0, 3);
+      const second3 = last6.slice(3, 6);
+      if (JSON.stringify(first3) === JSON.stringify(second3)) {
+        patternScore += 0.4; // Repeated sequences
+      }
+    }
+    
+    // Check for same note repetition
+    if (newRecentNotes.length >= 3) {
+      const last3 = newRecentNotes.slice(-3);
+      if (last3.every(note => note === last3[0])) {
+        patternScore += 0.5; // Same key mashing
+      }
+    }
+    
+    return { newRecentNotes, patternScore };
+  }, []);
+
+  const updateSystemExcitement = useCallback((noteIndex, velocity = 0.5) => {
     setSystemState(prev => {
-      const baseIncrease = calculateBaseExcitementIncrease(noteIndex, prev.lastNoteIndex);
+      // Detect pattern boredom
+      const { newRecentNotes, patternScore } = detectPatternBoredom(noteIndex, prev.recentNotes);
+      const newPatternBoredom = Math.min(1, prev.patternBoredom + patternScore);
+      
+      // Calculate novelty scores for all cells
+      const noveltyScores = calculateNoveltyScores(noteIndex, velocity);
+      const currentNoveltyScore = noveltyScores[noteIndex] || 0;
+      
+      // Find the cell with highest novelty score
+      let maxNoveltyCell = null;
+      let maxNoveltyScore = -Infinity;
+      Object.entries(noveltyScores).forEach(([cellIndex, score]) => {
+        if (score > maxNoveltyScore && score > adaptiveSystem.boredomBias) {
+          maxNoveltyScore = score;
+          maxNoveltyCell = parseInt(cellIndex);
+        }
+      });
+      
+      // Update color wheel position based on novelty winner
+      let newWheelPosition = prev.noveltyEngine.wheelPosition;
+      if (maxNoveltyCell !== null) {
+        // Find least recently used wheel position
+        const leastUsedPosition = adaptiveSystem.wheelUsageHistory.indexOf(
+          Math.min(...adaptiveSystem.wheelUsageHistory)
+        );
+        
+        newWheelPosition = leastUsedPosition;
+        adaptiveSystem.wheelUsageHistory[leastUsedPosition]++;
+        
+        // Create dynamic color mapping for this note
+        adaptiveSystem.colorWheelMappings[noteIndex] = {
+          wheelPosition: newWheelPosition,
+          timestamp: Date.now(),
+          noveltyScore: maxNoveltyScore
+        };
+        
+        // Reset boredom bias after successful competition
+        adaptiveSystem.boredomBias = 0;
+      } else {
+        // Increase boredom bias when no cell wins competition
+        adaptiveSystem.boredomBias = Math.min(1, adaptiveSystem.boredomBias + 0.01);
+      }
+      
+      const baseIncrease = calculateBaseExcitementIncrease(noteIndex, prev.lastNoteIndex, currentNoveltyScore);
       const distanceMultiplier = calculateDistanceMultiplier(noteIndex, prev.lastNoteIndex);
+      
+      // Apply pattern boredom penalty
+      const patternPenalty = 1 - (newPatternBoredom * 0.8); // Up to 80% reduction for patterns
       
       // Get current region and check regional repetition
       const currentRegion = getKeyRegion(noteIndex);
       const influencedRegions = getInfluencedRegions(noteIndex);
       const regionalHeat = getRegionalHeat(prev.regionRepetitionCounters, noteIndex);
       
-      // Check if we're staying in the same region cluster
+      // Apply Pask's boredom: reduce repetition factor based on adaptive thresholds
+      const currentCell = adaptiveSystem.cells[noteIndex];
+      const thresholdFactor = 1 - Math.min(0.6, (currentCell.threshold - 0.1) / 0.9 * 0.6); // Stronger threshold influence
+      
       const isStayingInRegion = !isDistantRegion(prev.lastRegion, currentRegion);
       let newRepetitionFactor;
       let newRegionCounters = { ...prev.regionRepetitionCounters };
       
       if (isStayingInRegion && regionalHeat > 0) {
-        // Staying in same region: compound the repetition factor based on regional heat
-        const alpha = Math.max(0.3, distanceMultiplier - (regionalHeat * 0.1)); // Heat reduces alpha
-        newRepetitionFactor = prev.currentRepetitionFactor * alpha;
+        // More aggressive boredom - heat builds up and penalizes strongly
+        const heatPenalty = Math.min(0.6, regionalHeat * 0.15); // Cap penalty at 60%, stronger rate
+        const alpha = Math.max(0.3, distanceMultiplier - heatPenalty) * Math.max(0.7, thresholdFactor);
+        newRepetitionFactor = Math.max(0.2, prev.currentRepetitionFactor * alpha); // Lower floor at 20%
         
-        // Increase heat for all influenced regions
+        // Faster heat accumulation for boredom
         influencedRegions.forEach(region => {
-          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1;
+          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1.0; // Build heat faster
         });
       } else {
-        // Moving to distant region: reset repetition factor
-        newRepetitionFactor = distanceMultiplier;
+        newRepetitionFactor = Math.max(0.8, distanceMultiplier * Math.max(0.9, thresholdFactor));
         
-        // Decay heat in old regions, start new heat in current regions
+        // Faster heat decay when moving regions
         Object.keys(newRegionCounters).forEach(region => {
-          newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 2);
+          newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 1.5);
         });
         
         // Start fresh heat in new regions
         influencedRegions.forEach(region => {
-          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1;
+          newRegionCounters[region] = (newRegionCounters[region] || 0) + 0.5;
         });
       }
       
-      // Apply both distance and regional repetition penalties
-      const finalIncrease = baseIncrease * newRepetitionFactor;
+      const finalIncrease = baseIncrease * newRepetitionFactor * patternPenalty;
       const newExcitement = Math.min(1, prev.excitement + finalIncrease);
+      
+      // Update adaptive thresholds state for UI display
+      const adaptiveThresholds = {};
+      Object.entries(adaptiveSystem.cells).forEach(([index, cell]) => {
+        adaptiveThresholds[index] = cell.threshold;
+      });
       
       return {
         ...prev,
@@ -449,44 +681,118 @@ function MusicolourApp() {
         lastKeyPressTime: Date.now(),
         regionRepetitionCounters: newRegionCounters,
         currentRepetitionFactor: newRepetitionFactor,
-        lastRegion: currentRegion
+        lastRegion: currentRegion,
+        adaptiveThresholds,
+        noveltyEngine: {
+          activeCell: maxNoveltyCell,
+          maxNoveltyScore: maxNoveltyScore,
+          wheelPosition: newWheelPosition
+        },
+        recentNotes: newRecentNotes,
+        patternBoredom: newPatternBoredom
       };
     });
-  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier]);
+  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, adaptiveSystem]);
 
-  // Constant boredom decay system (5 seconds from max to 0)
+  // Pask's adaptive boredom decay system with threshold updates
   useEffect(() => {
     const decayInterval = setInterval(() => {
       setSystemState(prev => {
-        // Decay rate: 1.0 excitement level in 5000ms = 0.2 per second = 0.0033 per 16.67ms
-        const decayRate = 0.2 / 60; // 60fps decay rate
+        const decayRate = 0.12 / 60; // Moderate decay - takes ~8.3 seconds to decay from max to 0
         const newExcitement = Math.max(0, prev.excitement - decayRate);
         
-        // Reset repetition factor and cool down regional heat when no keys are pressed
         const timeSinceLastKey = Date.now() - (prev.lastKeyPressTime || 0);
         let newRepetitionFactor = prev.currentRepetitionFactor;
         let newRegionCounters = { ...prev.regionRepetitionCounters };
         
-        if (timeSinceLastKey > 1000) { // After 1 second of no input
-          newRepetitionFactor = Math.min(1.0, newRepetitionFactor + 0.01); // Gradual recovery
+        // Update all adaptive threshold cells even when idle
+        Object.values(adaptiveSystem.cells).forEach(cell => {
+          cell.updateThreshold(0); // No envelope input when idle
+        });
+        
+        // Decay wheel usage history over time (forgetting mechanism)
+        adaptiveSystem.wheelUsageHistory = adaptiveSystem.wheelUsageHistory.map(usage => 
+          Math.max(0, usage - 0.001)
+        );
+        
+        // Increase boredom bias gradually when no input
+        if (timeSinceLastKey > 500) {
+          adaptiveSystem.boredomBias = Math.min(0.5, adaptiveSystem.boredomBias + 0.002);
+        }
+        
+        if (timeSinceLastKey > 800) { // Faster recovery
+          newRepetitionFactor = Math.min(1.0, newRepetitionFactor + 0.02); // Faster factor recovery
           
-          // Cool down regional heat gradually
+          // Faster heat cooling
           Object.keys(newRegionCounters).forEach(region => {
-            newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.02);
+            newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.05);
           });
         }
+        
+        // Decay pattern boredom over time
+        const newPatternBoredom = Math.max(0, prev.patternBoredom - 0.01);
+        
+        // Update adaptive thresholds for UI
+        const adaptiveThresholds = {};
+        Object.entries(adaptiveSystem.cells).forEach(([index, cell]) => {
+          adaptiveThresholds[index] = cell.threshold;
+        });
         
         return {
           ...prev,
           excitement: newExcitement,
           currentRepetitionFactor: newRepetitionFactor,
-          regionRepetitionCounters: newRegionCounters
+          regionRepetitionCounters: newRegionCounters,
+          adaptiveThresholds,
+          patternBoredom: newPatternBoredom
         };
       });
-    }, 16); // ~60fps for smooth decay
+    }, 16);
 
     return () => clearInterval(decayInterval);
-  }, []);
+  }, [adaptiveSystem]);
+
+  // Pask's adaptive color wheel - 8 segment color wheel
+  const getAdaptiveColor = useCallback((noteIndex, wheelPosition, excitementLevel, boredomBias) => {
+    const colorWheel = [
+      '#ff0000', // red
+      '#ffbf00', // amber  
+      '#80ff00', // yellow-green
+      '#00ff00', // green
+      '#00ffff', // cyan
+      '#0080ff', // blue
+      '#8000ff', // violet
+      '#ffffff'  // open-white
+    ];
+    
+    // Use wheel position to select color, with some randomness for emergent behavior
+    let baseColor = colorWheel[wheelPosition % 8];
+    
+    // Check if this note has a recent dynamic mapping
+    const mapping = adaptiveSystem.colorWheelMappings[noteIndex];
+    if (mapping && Date.now() - mapping.timestamp < 10000) { // 10 second memory
+      baseColor = colorWheel[mapping.wheelPosition % 8];
+    }
+    
+    // Apply boredom desaturation - when bored, colors become muted
+    const boredomFactor = Math.max(0.1, 1 - boredomBias * 2); // Higher boredom = more muted
+    const excitementFactor = Math.max(0.3, excitementLevel); // Low excitement = more muted
+    const colorIntensity = boredomFactor * excitementFactor;
+    
+    // Convert hex to RGB and apply intensity
+    const hex = baseColor.replace('#', '');
+    const r = parseInt(hex.substr(0, 2), 16);
+    const g = parseInt(hex.substr(2, 2), 16);
+    const b = parseInt(hex.substr(4, 2), 16);
+    
+    // When bored, blend towards gray
+    const gray = 128;
+    const newR = Math.round(r * colorIntensity + gray * (1 - colorIntensity));
+    const newG = Math.round(g * colorIntensity + gray * (1 - colorIntensity));
+    const newB = Math.round(b * colorIntensity + gray * (1 - colorIntensity));
+    
+    return `rgb(${newR}, ${newG}, ${newB})`;
+  }, [adaptiveSystem]);
 
   const handleKeyPress = useCallback((key) => {
     if (pressedKeys.has(key.note)) return;
@@ -497,33 +803,54 @@ function MusicolourApp() {
       pianoRef.current.triggerAttack(key.note);
     }
 
-    // Create visual effect with wider spread and random positioning
     const noteIndex = PIANO_KEYS.findIndex(k => k.note === key.note);
-    const intensity = 0.3 + (systemState.excitement * 0.7); // Scale with excitement
+    const velocity = 0.5 + Math.random() * 0.5; // Simulate velocity
     
-    // Create multiple effects for richer visuals
-    const baseX = (noteIndex - 8) * 1.2; // Wider spread
-    const randomOffset = (Math.random() - 0.5) * 4; // Random positioning
-    const randomY = (Math.random() - 0.5) * 3;
+    // Update system with Pask's adaptive algorithm first
+    updateSystemExcitement(noteIndex, velocity);
     
-    const newEffect = {
-      id: Date.now() + Math.random(),
-      type: 'ripple',
-      position: [baseX + randomOffset, randomY, (Math.random() - 0.5) * 2],
-      color: key.color,
-      intensity,
-      note: key.note,
-      timestamp: Date.now()
-    };
+    // Get adaptive color based on current wheel position, excitement, and boredom
+    const adaptiveColor = getAdaptiveColor(
+      noteIndex, 
+      systemState.noveltyEngine.wheelPosition,
+      systemState.excitement,
+      adaptiveSystem.boredomBias
+    );
+    
+    // Reduce intensity when bored - fewer effects, dimmer colors
+    const boredomIntensityReduction = Math.max(0.1, 1 - adaptiveSystem.boredomBias);
+    const excitementIntensity = 0.2 + (systemState.excitement * 0.6);
+    const intensity = excitementIntensity * boredomIntensityReduction;
+    
+    // Create effects based on excitement and boredom level
+    // When bored, create fewer, simpler effects
+    const shouldCreateEffect = Math.random() < boredomIntensityReduction;
+    
+    if (shouldCreateEffect) {
+      const baseX = (noteIndex - 8) * 1.2; // Wider spread
+      const randomOffset = (Math.random() - 0.5) * 4 * boredomIntensityReduction; // Less random when bored
+      const randomY = (Math.random() - 0.5) * 3 * boredomIntensityReduction;
+      
+      const newEffect = {
+        id: Date.now() + Math.random(),
+        type: 'ripple',
+        position: [baseX + randomOffset, randomY, (Math.random() - 0.5) * 2],
+        color: adaptiveColor, // Use Pask's adaptive color with boredom desaturation
+        intensity,
+        note: key.note,
+        timestamp: Date.now(),
+        wheelPosition: systemState.noveltyEngine.wheelPosition,
+        boredomLevel: adaptiveSystem.boredomBias
+      };
 
-    setActiveEffects(prev => [...prev, newEffect]);
-    updateSystemExcitement(noteIndex);
+      setActiveEffects(prev => [...prev, newEffect]);
+    }
 
     // Auto-release after timeout if not manually released
     keyTimeouts.current.set(key.note, setTimeout(() => {
       handleKeyRelease(key);
     }, 500));
-  }, [pressedKeys, systemState.excitement, updateSystemExcitement]);
+  }, [pressedKeys, systemState.excitement, systemState.noveltyEngine.wheelPosition, updateSystemExcitement, getAdaptiveColor]);
 
   const handleKeyRelease = useCallback((key) => {
     setPressedKeys(prev => {
@@ -570,7 +897,8 @@ function MusicolourApp() {
     <div className="w-full h-screen bg-black overflow-hidden relative">
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
-        <h1 className="text-3xl font-bold mb-2">Musicolour</h1>
+        <h1 className="text-3xl font-black tracking-tight mb-2" style={{ fontWeight: 900 }}>MUSICOLOUR</h1>
+        <h3 className=" font-black tracking-tight mb-2">by Gordon Pask</h3>
       </div>
       
       {/* Power Bar */}
@@ -578,16 +906,25 @@ function MusicolourApp() {
 
       {/* Instructions */}
       <div className="absolute top-6 right-6 z-10 text-white text-right">
-        <div className="text-sm opacity-75 space-y-1">
+        <div className="text-sm opacity-75 space-y-1 font-bold">
           <div>Play the piano to create visual music</div>
           <div>Use keyboard: Q-P (white keys), 2-0 (black keys)</div>
           <div>System adapts to your musical patterns</div>
-          <div className="text-xs opacity-50 mt-2 space-y-1">
+          <div className="text-xs opacity-50 mt-2 space-y-1 font-extrabold">
             <div>Repetition Factor: {systemState.currentRepetitionFactor.toFixed(3)}</div>
             <div>Current Region: {systemState.lastRegion !== null ? systemState.lastRegion : 'None'}</div>
             <div>Regional Heat: {systemState.lastRegion !== null ? 
               getRegionalHeat(systemState.regionRepetitionCounters, systemState.lastNoteIndex || 0).toFixed(1) : '0.0'
             }</div>
+            <div className="border-t border-white border-opacity-20 pt-1 mt-2">
+              <div>Active A-T Cell: {systemState.noveltyEngine.activeCell !== null ? systemState.noveltyEngine.activeCell : 'None'}</div>
+              <div>Max Novelty: {systemState.noveltyEngine.maxNoveltyScore.toFixed(3)}</div>
+              <div>Wheel Position: {systemState.noveltyEngine.wheelPosition}</div>
+              <div>Boredom Bias: {adaptiveSystem.boredomBias.toFixed(3)}</div>
+              {systemState.lastNoteIndex !== null && systemState.adaptiveThresholds[systemState.lastNoteIndex] && (
+                <div>Last Threshold: {systemState.adaptiveThresholds[systemState.lastNoteIndex].toFixed(3)}</div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -600,10 +937,18 @@ function MusicolourApp() {
         >
           <color attach="background" args={['#0f0f0f']} />
           
-          {/* Lighting */}
-          <ambientLight intensity={0.4} />
-          <pointLight position={[5, 5, 5]} intensity={0.8} color="#4ecdc4" />
-          <pointLight position={[-5, 5, 5]} intensity={0.8} color="#ff6b6b" />
+          {/* Lighting - dimmer when bored */}
+          <ambientLight intensity={0.2 + 0.2 * (1 - adaptiveSystem.boredomBias)} />
+          <pointLight 
+            position={[5, 5, 5]} 
+            intensity={0.4 + 0.4 * (1 - adaptiveSystem.boredomBias)} 
+            color="#4ecdc4" 
+          />
+          <pointLight 
+            position={[-5, 5, 5]} 
+            intensity={0.4 + 0.4 * (1 - adaptiveSystem.boredomBias)} 
+            color="#ff6b6b" 
+          />
 
           {/* Active visual effects */}
           {activeEffects.map(effect => (
@@ -625,11 +970,24 @@ function MusicolourApp() {
           {/* Background waves for currently pressed keys */}
           {Array.from(pressedKeys).map(note => {
             const key = PIANO_KEYS.find(k => k.note === note);
+            const noteIndex = PIANO_KEYS.findIndex(k => k.note === note);
+            
+            // Apply boredom-aware coloring and intensity to background waves too
+            const adaptiveColor = getAdaptiveColor(
+              noteIndex,
+              systemState.noveltyEngine.wheelPosition,
+              systemState.excitement,
+              adaptiveSystem.boredomBias
+            );
+            
+            const boredomIntensityReduction = Math.max(0.1, 1 - adaptiveSystem.boredomBias);
+            const waveIntensity = systemState.excitement * boredomIntensityReduction;
+            
             return (
               <ColorWave
                 key={note}
-                color={key.color}
-                intensity={1}
+                color={adaptiveColor}
+                intensity={waveIntensity}
                 note={note}
               />
             );
