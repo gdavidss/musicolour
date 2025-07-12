@@ -196,12 +196,12 @@ function PowerBar({ excitement = 0 }) {
   };
 
   const moodData = getMoodData(excitement);
-  const fillHeight = Math.max(5, excitement * 95); // 5% minimum, 95% max
+  const fillHeight = Math.max(2, excitement * 98 + 2); // 2% minimum, 100% max for complete fill
 
   return (
     <div className="fixed left-6 top-1/2 transform -translate-y-1/2 z-20">
       {/* Thermometer container - 35% taller */}
-      <div className="relative w-8 h-80 bg-black bg-opacity-30 rounded-full border border-white border-opacity-20 overflow-hidden shadow-lg">
+      <div className="relative w-8 h-96 bg-black bg-opacity-30 rounded-full border border-white border-opacity-20 overflow-hidden shadow-lg">
         {/* Background grid */}
         <div className="absolute inset-0">
           {[...Array(10)].map((_, i) => (
@@ -417,7 +417,9 @@ function MusicolourApp() {
       wheelPosition: 0
     },
     recentNotes: [], // Track recent note sequence for pattern detection
-    patternBoredom: 0 // Track boredom from repetitive patterns
+    patternBoredom: 0, // Track boredom from repetitive patterns
+    lastKeyTimes: [], // Track timing of recent key presses
+    speedPenalty: 0 // Penalty for playing too fast
   });
 
   const pianoRef = useRef(null);
@@ -514,16 +516,16 @@ function MusicolourApp() {
 
   // Calculate base excitement increase based on novelty
   const calculateBaseExcitementIncrease = useCallback((currentNoteIndex, lastNoteIndex, noveltyScore) => {
-    if (lastNoteIndex === null) return 0.08; // Moderate initial excitement
+    if (lastNoteIndex === null) return 0.035; // Slightly higher initial excitement
     
     // Base excitement now influenced by novelty score
     const distance = Math.abs(currentNoteIndex - lastNoteIndex);
     const maxDistance = PIANO_KEYS.length - 1;
     const normalizedDistance = distance / maxDistance;
     
-    // Combine distance-based excitement with novelty - balanced gains
-    const distanceExcitement = 0.04 + 0.15 * (1 - Math.exp(-3 * normalizedDistance)); // Moderate gains
-    const noveltyMultiplier = 1 + Math.max(0, noveltyScore) * 1.5; // Moderate novelty amplification
+    // Combine distance-based excitement with novelty - higher base for close notes
+    const distanceExcitement = 0.03 + 0.035 * (1 - Math.exp(-3 * normalizedDistance)); // Higher base excitement
+    const noveltyMultiplier = 1 + Math.max(0, noveltyScore) * 0.6; // Smaller novelty reward
     
     return distanceExcitement * noveltyMultiplier;
   }, []);
@@ -539,6 +541,40 @@ function MusicolourApp() {
     // Adjacent keys (distance=1) get ~0.75, far keys get ~0.95
     const normalizedDistance = distance / maxDistance;
     return 0.7 + 0.25 * normalizedDistance; // Range from 0.7 to 0.95 (much gentler)
+  }, []);
+
+  // Detect speed punishment - playing too fast reduces excitement
+  const detectSpeedPunishment = useCallback((lastKeyTimes) => {
+    const now = Date.now();
+    const newKeyTimes = [...lastKeyTimes, now].slice(-5); // Keep last 5 key times
+    
+    let speedPenalty = 0;
+    
+    if (newKeyTimes.length >= 3) {
+      // Calculate average interval between recent keys
+      const intervals = [];
+      for (let i = 1; i < newKeyTimes.length; i++) {
+        intervals.push(newKeyTimes[i] - newKeyTimes[i - 1]);
+      }
+      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      
+      // Punish if average interval is less than 100ms (very fast)
+      if (avgInterval < 100) {
+        speedPenalty = Math.min(0.6, (100 - avgInterval) / 100 * 0.6); // Up to 60% penalty
+      }
+      
+      // Severe punishment for extremely fast playing (< 60ms)
+      if (avgInterval < 60) {
+        speedPenalty += 0.5; // Additional 50% penalty
+      }
+      
+      // Complete punishment for key mashing (< 30ms)
+      if (avgInterval < 30) {
+        speedPenalty = 1.3; // More than 100% penalty = negative excitement
+      }
+    }
+    
+    return { newKeyTimes, speedPenalty };
   }, []);
 
   // Detect repetitive patterns in note sequences
@@ -579,6 +615,10 @@ function MusicolourApp() {
 
   const updateSystemExcitement = useCallback((noteIndex, velocity = 0.5) => {
     setSystemState(prev => {
+      // Detect speed punishment
+      const { newKeyTimes, speedPenalty } = detectSpeedPunishment(prev.lastKeyTimes);
+      const newSpeedPenalty = Math.min(1, prev.speedPenalty + speedPenalty);
+      
       // Detect pattern boredom
       const { newRecentNotes, patternScore } = detectPatternBoredom(noteIndex, prev.recentNotes);
       const newPatternBoredom = Math.min(1, prev.patternBoredom + patternScore);
@@ -622,11 +662,16 @@ function MusicolourApp() {
         adaptiveSystem.boredomBias = Math.min(1, adaptiveSystem.boredomBias + 0.01);
       }
       
+      // Add pattern and speed boredom to visual boredom bias
+      const totalBoredom = newPatternBoredom + newSpeedPenalty;
+      adaptiveSystem.boredomBias = Math.min(1, adaptiveSystem.boredomBias + totalBoredom * 0.3);
+      
       const baseIncrease = calculateBaseExcitementIncrease(noteIndex, prev.lastNoteIndex, currentNoveltyScore);
       const distanceMultiplier = calculateDistanceMultiplier(noteIndex, prev.lastNoteIndex);
       
-      // Apply pattern boredom penalty
+      // Apply pattern boredom and speed penalties
       const patternPenalty = 1 - (newPatternBoredom * 0.8); // Up to 80% reduction for patterns
+      const speedPenaltyFactor = 1 - newSpeedPenalty; // Can go negative for very fast typing
       
       // Get current region and check regional repetition
       const currentRegion = getKeyRegion(noteIndex);
@@ -665,8 +710,15 @@ function MusicolourApp() {
         });
       }
       
-      const finalIncrease = baseIncrease * newRepetitionFactor * patternPenalty;
-      const newExcitement = Math.min(1, prev.excitement + finalIncrease);
+      let finalIncrease = baseIncrease * newRepetitionFactor * patternPenalty * speedPenaltyFactor;
+      
+      // If penalties are severe, make excitement actually decrease
+      const totalPenalty = (1 - patternPenalty) + (1 - speedPenaltyFactor) + (1 - newRepetitionFactor);
+      if (totalPenalty > 1.0) {
+        finalIncrease = -0.02; // Active punishment - excitement goes down
+      }
+      
+      const newExcitement = Math.max(0, Math.min(1, prev.excitement + finalIncrease));
       
       // Update adaptive thresholds state for UI display
       const adaptiveThresholds = {};
@@ -689,16 +741,18 @@ function MusicolourApp() {
           wheelPosition: newWheelPosition
         },
         recentNotes: newRecentNotes,
-        patternBoredom: newPatternBoredom
+        patternBoredom: newPatternBoredom,
+        lastKeyTimes: newKeyTimes,
+        speedPenalty: newSpeedPenalty
       };
     });
-  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, adaptiveSystem]);
+  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, detectSpeedPunishment, adaptiveSystem]);
 
   // Pask's adaptive boredom decay system with threshold updates
   useEffect(() => {
     const decayInterval = setInterval(() => {
       setSystemState(prev => {
-        const decayRate = 0.12 / 60; // Moderate decay - takes ~8.3 seconds to decay from max to 0
+        const decayRate = 0.12 / 60; // Slightly faster decay - takes ~8.3 seconds to decay from max to 0
         const newExcitement = Math.max(0, prev.excitement - decayRate);
         
         const timeSinceLastKey = Date.now() - (prev.lastKeyPressTime || 0);
@@ -715,9 +769,19 @@ function MusicolourApp() {
           Math.max(0, usage - 0.001)
         );
         
-        // Increase boredom bias gradually when no input
+        // Decay pattern boredom and speed penalty over time (declare early)
+        const newPatternBoredom = Math.max(0, prev.patternBoredom - 0.01);
+        const newSpeedPenalty = Math.max(0, prev.speedPenalty - 0.02); // Faster decay for speed penalty
+        
+        // Increase boredom bias gradually when no input, but decay when patterns/speed improve
         if (timeSinceLastKey > 500) {
           adaptiveSystem.boredomBias = Math.min(0.5, adaptiveSystem.boredomBias + 0.002);
+        } else {
+          // Decay boredom bias when actively playing with good patterns/speed
+          const totalBoredomLevel = newPatternBoredom + newSpeedPenalty;
+          if (totalBoredomLevel < 0.3) {
+            adaptiveSystem.boredomBias = Math.max(0, adaptiveSystem.boredomBias - 0.01);
+          }
         }
         
         if (timeSinceLastKey > 800) { // Faster recovery
@@ -728,9 +792,6 @@ function MusicolourApp() {
             newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.05);
           });
         }
-        
-        // Decay pattern boredom over time
-        const newPatternBoredom = Math.max(0, prev.patternBoredom - 0.01);
         
         // Update adaptive thresholds for UI
         const adaptiveThresholds = {};
@@ -744,7 +805,8 @@ function MusicolourApp() {
           currentRepetitionFactor: newRepetitionFactor,
           regionRepetitionCounters: newRegionCounters,
           adaptiveThresholds,
-          patternBoredom: newPatternBoredom
+          patternBoredom: newPatternBoredom,
+          speedPenalty: newSpeedPenalty
         };
       });
     }, 16);
@@ -774,9 +836,9 @@ function MusicolourApp() {
       baseColor = colorWheel[mapping.wheelPosition % 8];
     }
     
-    // Apply boredom desaturation - when bored, colors become muted
-    const boredomFactor = Math.max(0.1, 1 - boredomBias * 2); // Higher boredom = more muted
-    const excitementFactor = Math.max(0.3, excitementLevel); // Low excitement = more muted
+    // Apply boredom desaturation - when bored, colors become heavily muted
+    const boredomFactor = Math.max(0.05, 1 - boredomBias * 3); // Much more aggressive muting
+    const excitementFactor = Math.max(0.1, excitementLevel); // Lower floor for excitement
     const colorIntensity = boredomFactor * excitementFactor;
     
     // Convert hex to RGB and apply intensity
@@ -817,9 +879,9 @@ function MusicolourApp() {
       adaptiveSystem.boredomBias
     );
     
-    // Reduce intensity when bored - fewer effects, dimmer colors
-    const boredomIntensityReduction = Math.max(0.1, 1 - adaptiveSystem.boredomBias);
-    const excitementIntensity = 0.2 + (systemState.excitement * 0.6);
+    // Reduce intensity when bored - much more dramatic reduction
+    const boredomIntensityReduction = Math.max(0.02, 1 - adaptiveSystem.boredomBias * 1.5); // Much lower floor
+    const excitementIntensity = 0.1 + (systemState.excitement * 0.8); // Wider range
     const intensity = excitementIntensity * boredomIntensityReduction;
     
     // Create effects based on excitement and boredom level
@@ -898,7 +960,7 @@ function MusicolourApp() {
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-black tracking-tight mb-2" style={{ fontWeight: 900 }}>MUSICOLOUR</h1>
-        <h3 className=" font-black tracking-tight mb-2">by Gordon Pask</h3>
+        <h3 className=" font-black tracking-tight mb-2">by Gordon Pask</h3>aa
       </div>
       
       {/* Power Bar */}
@@ -937,16 +999,16 @@ function MusicolourApp() {
         >
           <color attach="background" args={['#0f0f0f']} />
           
-          {/* Lighting - dimmer when bored */}
-          <ambientLight intensity={0.2 + 0.2 * (1 - adaptiveSystem.boredomBias)} />
+          {/* Lighting - much dimmer when bored */}
+          <ambientLight intensity={0.05 + 0.5 * (1 - adaptiveSystem.boredomBias * 1.2)} />
           <pointLight 
             position={[5, 5, 5]} 
-            intensity={0.4 + 0.4 * (1 - adaptiveSystem.boredomBias)} 
+            intensity={0.1 + 0.7 * (1 - adaptiveSystem.boredomBias * 1.2)} 
             color="#4ecdc4" 
           />
           <pointLight 
             position={[-5, 5, 5]} 
-            intensity={0.4 + 0.4 * (1 - adaptiveSystem.boredomBias)} 
+            intensity={0.1 + 0.7 * (1 - adaptiveSystem.boredomBias * 1.2)} 
             color="#ff6b6b" 
           />
 
@@ -980,7 +1042,7 @@ function MusicolourApp() {
               adaptiveSystem.boredomBias
             );
             
-            const boredomIntensityReduction = Math.max(0.1, 1 - adaptiveSystem.boredomBias);
+            const boredomIntensityReduction = Math.max(0.02, 1 - adaptiveSystem.boredomBias * 1.5);
             const waveIntensity = systemState.excitement * boredomIntensityReduction;
             
             return (
