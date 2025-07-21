@@ -11,3 +11,16 @@
     font-stretch: condensed;
   }
 }
+
+/* Subtle pulse animation for gain indicator */
+@keyframes subtlePulse {
+  0%, 100% {
+    opacity: 0.8;
+    transform: translateY(50%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(50%) scale(1.1);
+  }
+}
+

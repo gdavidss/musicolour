@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { Text, OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
 import * as Tone from 'tone';
+import FluidCanvas from './FluidCanvas';
+import { createFluidSimulation } from './webgl-fluid-wrapper';
+import ParameterSliders from './ParameterSliders';
 
 // Initialize Tone.js
 Tone.start();
@@ -183,24 +183,132 @@ function PianoKey({ keyData, isPressed, onPress, onRelease }) {
   );
 }
 
+// Helper function to interpolate between two colors
+const interpolateColor = (color1, color2, factor) => {
+  const c1 = parseInt(color1.slice(1), 16);
+  const c2 = parseInt(color2.slice(1), 16);
+  
+  const r1 = (c1 >> 16) & 0xff;
+  const g1 = (c1 >> 8) & 0xff;
+  const b1 = c1 & 0xff;
+  
+  const r2 = (c2 >> 16) & 0xff;
+  const g2 = (c2 >> 8) & 0xff;
+  const b2 = c2 & 0xff;
+  
+  const r = Math.round(r1 + (r2 - r1) * factor);
+  const g = Math.round(g1 + (g2 - g1) * factor);
+  const b = Math.round(b1 + (b2 - b1) * factor);
+  
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+};
+
+// Smooth color interpolation based on excitement level
+const getInterpolatedColor = (level) => {
+  // Create a smooth gradient from gray to rainbow spectrum
+  // Gray -> Red -> Orange -> Yellow -> Green -> Blue -> Purple
+  
+  if (level === 0) return '#6c757d'; // Gray when completely bored
+  
+  // Define rainbow spectrum colors
+  const rainbowColors = [
+    { pos: 0, color: '#6c757d' },     // Gray
+    { pos: 0.16, color: '#ff0000' },  // Red
+    { pos: 0.33, color: '#ff8800' },  // Orange
+    { pos: 0.5, color: '#ffff00' },   // Yellow
+    { pos: 0.66, color: '#00ff00' },  // Green
+    { pos: 0.83, color: '#0088ff' },  // Blue
+    { pos: 1, color: '#8800ff' }      // Purple
+  ];
+  
+  // Find which two colors we're between
+  let color1, color2, localT;
+  
+  for (let i = 0; i < rainbowColors.length - 1; i++) {
+    if (level >= rainbowColors[i].pos && level <= rainbowColors[i + 1].pos) {
+      color1 = rainbowColors[i];
+      color2 = rainbowColors[i + 1];
+      // Calculate local t value between these two colors
+      localT = (level - color1.pos) / (color2.pos - color1.pos);
+      break;
+    }
+  }
+  
+  // If we didn't find a range (shouldn't happen), use the last color
+  if (!color1 || !color2) {
+    return rainbowColors[rainbowColors.length - 1].color;
+  }
+  
+  return interpolateColor(color1.color, color2.color, localT);
+};
+
 // Thermometer Power Bar Component
 function PowerBar({ excitement = 0 }) {
-  const getMoodData = (excitementLevel) => {
-    if (excitementLevel > 0.7) {
-      return { color: '#ff6b6b', label: 'EXCITED' };
-    } else if (excitementLevel < 0.2) {
-      return { color: '#6c757d', label: 'BORED' };
-    } else {
-      return { color: '#4ecdc4', label: 'NEUTRAL' };
-    }
+  const [displayExcitement, setDisplayExcitement] = useState(excitement);
+  const [targetExcitement, setTargetExcitement] = useState(excitement);
+  const animationRef = useRef();
+  const lastUpdateTime = useRef(Date.now());
+  
+  // Constants for animation
+  const ANIMATION_SPEED = 0.3; // Units per second (0 to 1 scale)
+  
+  // Update target when excitement changes
+  useEffect(() => {
+    setTargetExcitement(excitement);
+  }, [excitement]);
+  
+  // Smooth animation loop
+  useEffect(() => {
+    let animationId;
+    
+    const animate = () => {
+      const now = Date.now();
+      const deltaTime = (now - lastUpdateTime.current) / 1000; // Convert to seconds
+      lastUpdateTime.current = now;
+      
+      setDisplayExcitement(current => {
+        const diff = targetExcitement - current;
+        
+        // If we're close enough, snap to target
+        if (Math.abs(diff) < 0.001) {
+          return targetExcitement;
+        }
+        
+        // Calculate movement based on constant speed
+        const maxMove = ANIMATION_SPEED * deltaTime;
+        const move = Math.sign(diff) * Math.min(Math.abs(diff), maxMove);
+        
+        return Math.max(0, Math.min(1, current + move));
+      });
+      
+      animationId = requestAnimationFrame(animate);
+    };
+    
+    animationId = requestAnimationFrame(animate);
+    
+    return () => {
+      if (animationId) {
+        cancelAnimationFrame(animationId);
+      }
+    };
+  }, [targetExcitement]);
+  
+  const getMoodLabel = (level) => {
+    if (level > 0.7) return 'EXCITED';
+    if (level < 0.2) return 'BORED';
+    return 'NEUTRAL';
   };
 
-  const moodData = getMoodData(excitement);
-  const fillHeight = Math.max(2, excitement * 98 + 2); // 2% minimum, 100% max for complete fill
+  const currentColor = getInterpolatedColor(displayExcitement);
+  const moodLabel = getMoodLabel(displayExcitement);
+  
+  // Calculate fill heights
+  const fillHeight = Math.max(2, displayExcitement * 98 + 2);
+  const targetHeight = Math.max(2, targetExcitement * 98 + 2);
 
   return (
     <div className="fixed left-6 top-1/2 transform -translate-y-1/2 z-20">
-      {/* Thermometer container - 35% taller */}
+      {/* Thermometer container */}
       <div className="relative w-8 h-96 bg-black bg-opacity-30 rounded-full border border-white border-opacity-20 overflow-hidden shadow-lg">
         {/* Background grid */}
         <div className="absolute inset-0">
@@ -213,32 +321,71 @@ function PowerBar({ excitement = 0 }) {
           ))}
         </div>
         
-        {/* Fill */}
+        {/* Main fill with smooth color transition */}
         <div
-          className="absolute bottom-0 left-0 right-0 transition-all duration-1000 ease-out rounded-full"
+          className="absolute bottom-0 left-0 right-0 rounded-full"
           style={{
             height: `${fillHeight}%`,
-            backgroundColor: moodData.color,
-            boxShadow: `0 0 20px ${moodData.color}40`
+            backgroundColor: currentColor,
+            boxShadow: `0 0 20px ${currentColor}40`
           }}
         />
+        
+        {/* Gain/Loss indicator with gradient */}
+        {Math.abs(targetExcitement - displayExcitement) > 0.01 && (
+          <>
+            {/* Soft gradient fill between current and target */}
+            <div
+              className="absolute left-0 right-0 rounded-full pointer-events-none"
+              style={{
+                bottom: Math.min(fillHeight, targetHeight) + '%',
+                height: Math.abs(targetHeight - fillHeight) + '%',
+                background: `linear-gradient(${targetExcitement > displayExcitement ? 'to top' : 'to bottom'}, 
+                  ${currentColor}00 0%, 
+                  ${currentColor}20 20%, 
+                  ${currentColor}30 50%, 
+                  ${currentColor}20 80%, 
+                  ${currentColor}00 100%)`,
+                opacity: Math.min(0.8, Math.abs(targetExcitement - displayExcitement) * 2),
+                transition: 'opacity 0.3s ease-out'
+              }}
+            />
+            
+            {/* Target position indicator */}
+            <div
+              className="absolute left-0 right-0 h-0.5 rounded-full"
+              style={{
+                bottom: `${targetHeight}%`,
+                backgroundColor: getInterpolatedColor(targetExcitement),
+                opacity: Math.min(0.9, Math.abs(targetExcitement - displayExcitement) * 3),
+                boxShadow: `0 0 8px ${getInterpolatedColor(targetExcitement)}`,
+                transform: 'translateY(50%)',
+                transition: 'opacity 0.2s ease-out',
+                animation: Math.abs(targetExcitement - displayExcitement) > 0.05 ? 'subtlePulse 1.5s ease-in-out infinite' : 'none'
+              }}
+            />
+          </>
+        )}
         
         {/* Glow effect */}
         <div
           className="absolute bottom-0 left-0 right-0 opacity-60 rounded-full blur-sm"
           style={{
             height: `${fillHeight}%`,
-            backgroundColor: moodData.color
+            backgroundColor: currentColor
           }}
         />
       </div>
       
       {/* Label */}
       <div 
-        className="text-xs font-mono mt-2 text-center transition-colors duration-1000 font-black tracking-wide"
-        style={{ color: moodData.color, fontWeight: 900 }}
+        className="text-xs font-mono mt-2 text-center font-black tracking-wide transition-all duration-300"
+        style={{ 
+          color: currentColor, 
+          fontWeight: 900
+        }}
       >
-        {moodData.label}
+        {moodLabel}
       </div>
     </div>
   );
@@ -290,104 +437,38 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
   );
 }
 
-// Enhanced Visual Effects
-function RippleEffect({ position, color, intensity = 1, note }) {
-  const mesh = useRef();
-  const [scale, setScale] = useState(0);
-  
-  useFrame((state, delta) => {
-    if (mesh.current) {
-      setScale(prev => prev + delta * 5);
-      mesh.current.scale.set(scale, scale, 1);
-      mesh.current.material.opacity = Math.max(0, 1 - scale / 3);
-      
-      // Add subtle rotation based on note
-      const noteIndex = PIANO_KEYS.findIndex(k => k.note === note);
-      mesh.current.rotation.z = (noteIndex * 0.2) + state.clock.elapsedTime * 0.5;
-    }
-  });
-
-  return (
-    <mesh ref={mesh} position={position}>
-      <ringGeometry args={[0.5, 1.5, 32]} />
-      <meshBasicMaterial color={color} transparent />
-    </mesh>
-  );
-}
-
-function ColorWave({ color, intensity, note }) {
-  const mesh = useRef();
-  
-  useFrame((state) => {
-    if (mesh.current) {
-      const noteIndex = PIANO_KEYS.findIndex(k => k.note === note);
-      const frequency = (noteIndex + 1) * 0.1;
-      mesh.current.material.opacity = 0.3 + Math.sin(state.clock.elapsedTime * 3) * 0.2 * intensity;
-      mesh.current.scale.y = 1 + Math.sin(state.clock.elapsedTime * frequency * 5) * 0.5 * intensity;
-      mesh.current.rotation.y = state.clock.elapsedTime * frequency;
-    }
-  });
-
-  const noteIndex = PIANO_KEYS.findIndex(k => k.note === note);
-  const height = 2 + noteIndex * 0.1;
-
-  return (
-    <mesh ref={mesh} position={[0, 0, -5]}>
-      <cylinderGeometry args={[3, 3, height, 32]} />
-      <meshBasicMaterial color={color} transparent />
-    </mesh>
-  );
-}
-
-function NoteParticles({ note, color, position }) {
-  const particles = useRef();
-  const particleCount = 50;
-  
-  useFrame((state) => {
-    if (particles.current) {
-      const positions = particles.current.geometry.attributes.position.array;
-      for (let i = 0; i < particleCount; i++) {
-        const i3 = i * 3;
-        positions[i3 + 1] += 0.02; // Y movement
-        
-        // Reset particle if it goes too high
-        if (positions[i3 + 1] > 5) {
-          positions[i3] = (Math.random() - 0.5) * 2;
-          positions[i3 + 1] = -2;
-          positions[i3 + 2] = (Math.random() - 0.5) * 2;
-        }
-      }
-      particles.current.geometry.attributes.position.needsUpdate = true;
-    }
-  });
-
-  const positions = new Float32Array(particleCount * 3);
-  for (let i = 0; i < particleCount; i++) {
-    positions[i * 3] = (Math.random() - 0.5) * 2;
-    positions[i * 3 + 1] = Math.random() * -2;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 2;
-  }
-
-  return (
-    <points ref={particles}>
-      <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          array={positions}
-          count={particleCount}
-          itemSize={3}
-        />
-      </bufferGeometry>
-      <pointsMaterial color={color} size={0.05} />
-    </points>
-  );
-}
+// Fluid simulation will replace the 3D effects
 
 function MusicolourApp() {
   const [pressedKeys, setPressedKeys] = useState(new Set());
-  const [activeEffects, setActiveEffects] = useState([]);
+  const fluidCanvasRef = useRef(null);
   
-  // Initialize Pask's adaptive system
+  // ---------------- TUNABLE PARAMETERS ----------------
+  const paramDefs = {
+    baseExcitementBase: { label: 'Base Excitement', min: 0, max: 0.05, step: 0.001, default: 0.01 },
+    baseExcitementDistanceScale: { label: 'Distance Scale', min: 0, max: 0.05, step: 0.001, default: 0.015 },
+    noveltyMultiplier: { label: 'Novelty Multiplier', min: 0, max: 1, step: 0.01, default: 0.2 },
+    distanceMultiplierMin: { label: 'Dist Mult Min', min: 0.4, max: 1, step: 0.01, default: 0.7 },
+    distanceMultiplierScale: { label: 'Dist Mult Scale', min: 0, max: 1, step: 0.01, default: 0.25 },
+    patternPenaltyWeight: { label: 'Pattern Penalty', min: 0, max: 2, step: 0.01, default: 0.8 },
+    speedPenaltyWeight: { label: 'Speed Penalty', min: 0, max: 2, step: 0.01, default: 1 },
+    excitementDecayRate: { label: 'Decay Rate', min: 0.05, max: 0.5, step: 0.01, default: 0.15 },
+    repetitionHeatPenaltyFactor: { label: 'Heat Penalty', min: 0, max: 0.5, step: 0.01, default: 0.15 }
+  };
+
+  const [params, setParams] = useState(() => {
+    const initial = {};
+    Object.entries(paramDefs).forEach(([key, def]) => {
+      initial[key] = def.default;
+    });
+    return initial;
+  });
+
+  const handleParamChange = useCallback((key, value) => {
+    setParams(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  // Initialize Pask's adaptive system (restored)
   const [adaptiveSystem] = useState(() => {
     const cells = {};
     PIANO_KEYS.forEach((key, index) => {
@@ -402,6 +483,7 @@ function MusicolourApp() {
       wheelUsageHistory: new Array(8).fill(0), // Track wheel position usage
     };
   });
+  // ----------------------------------------------------
   
   const [systemState, setSystemState] = useState({
     excitement: 0, // 0 to 1 scale
@@ -478,7 +560,7 @@ function MusicolourApp() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [pressedKeys]);
+  });
 
   // Pask's Novelty Engine - calculates novelty scores for each cell
   const calculateNoveltyScores = useCallback((triggeredCellIndex, envelopeValue) => {
@@ -516,19 +598,19 @@ function MusicolourApp() {
 
   // Calculate base excitement increase based on novelty
   const calculateBaseExcitementIncrease = useCallback((currentNoteIndex, lastNoteIndex, noveltyScore) => {
-    if (lastNoteIndex === null) return 0.035; // Slightly higher initial excitement
+    if (lastNoteIndex === null) return params.baseExcitementBase; // Tunable initial value
     
     // Base excitement now influenced by novelty score
     const distance = Math.abs(currentNoteIndex - lastNoteIndex);
     const maxDistance = PIANO_KEYS.length - 1;
     const normalizedDistance = distance / maxDistance;
     
-    // Combine distance-based excitement with novelty - higher base for close notes
-    const distanceExcitement = 0.03 + 0.035 * (1 - Math.exp(-3 * normalizedDistance)); // Higher base excitement
-    const noveltyMultiplier = 1 + Math.max(0, noveltyScore) * 0.6; // Smaller novelty reward
+    // Combine distance-based excitement with novelty - tuned for 60-second goal
+    const distanceExcitement = params.baseExcitementBase + params.baseExcitementDistanceScale * (1 - Math.exp(-3 * normalizedDistance));
+    const noveltyMultiplier = 1 + Math.max(0, noveltyScore) * params.noveltyMultiplier;
     
     return distanceExcitement * noveltyMultiplier;
-  }, []);
+  }, [params]);
 
   // Calculate distance-based multiplication factor
   const calculateDistanceMultiplier = useCallback((currentNoteIndex, lastNoteIndex) => {
@@ -540,55 +622,76 @@ function MusicolourApp() {
     // Distance multiplier: close notes get much gentler penalty
     // Adjacent keys (distance=1) get ~0.75, far keys get ~0.95
     const normalizedDistance = distance / maxDistance;
-    return 0.7 + 0.25 * normalizedDistance; // Range from 0.7 to 0.95 (much gentler)
-  }, []);
+    return params.distanceMultiplierMin + params.distanceMultiplierScale * normalizedDistance;
+  }, [params]);
 
   // Detect speed punishment - playing too fast reduces excitement
   const detectSpeedPunishment = useCallback((lastKeyTimes) => {
     const now = Date.now();
-    const newKeyTimes = [...lastKeyTimes, now].slice(-5); // Keep last 5 key times
+    const newKeyTimes = [...lastKeyTimes, now].slice(-10); // Keep last 10 key times for better analysis
     
     let speedPenalty = 0;
+    let speedBonus = 0;
     
     if (newKeyTimes.length >= 3) {
-      // Calculate average interval between recent keys
+      // Calculate intervals between recent keys
       const intervals = [];
       for (let i = 1; i < newKeyTimes.length; i++) {
         intervals.push(newKeyTimes[i] - newKeyTimes[i - 1]);
       }
       const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
       
+      // Check interval consistency (musical rhythm vs random mashing)
+      const intervalVariance = intervals.reduce((sum, interval) => {
+        return sum + Math.pow(interval - avgInterval, 2);
+      }, 0) / intervals.length;
+      const intervalStdDev = Math.sqrt(intervalVariance);
+      
       // Punish if average interval is less than 100ms (very fast)
       if (avgInterval < 100) {
-        speedPenalty = Math.min(0.6, (100 - avgInterval) / 100 * 0.6); // Up to 60% penalty
+        speedPenalty = Math.min(0.8, (100 - avgInterval) / 100 * 0.8); // Increased penalty
+        
+        // Extra penalty for inconsistent fast playing (mashing)
+        if (intervalStdDev > avgInterval * 0.5) {
+          speedPenalty += 0.3;
+        }
       }
       
       // Severe punishment for extremely fast playing (< 60ms)
       if (avgInterval < 60) {
-        speedPenalty += 0.5; // Additional 50% penalty
+        speedPenalty += 0.6; // Increased penalty
       }
       
       // Complete punishment for key mashing (< 30ms)
       if (avgInterval < 30) {
-        speedPenalty = 1.3; // More than 100% penalty = negative excitement
+        speedPenalty = 1.5; // Even higher penalty
+      }
+      
+      // NEW: Reward consistent rhythmic playing (musical timing)
+      if (avgInterval > 150 && avgInterval < 500 && intervalStdDev < avgInterval * 0.2) {
+        speedBonus = -0.1; // Small bonus for rhythmic consistency
       }
     }
     
-    return { newKeyTimes, speedPenalty };
+    return { 
+      newKeyTimes, 
+      speedPenalty: Math.max(0, speedPenalty + speedBonus) 
+    };
   }, []);
 
-  // Detect repetitive patterns in note sequences
+  // Detect repetitive patterns in note sequences - enhanced for musical detection
   const detectPatternBoredom = useCallback((noteIndex, recentNotes) => {
-    const newRecentNotes = [...recentNotes, noteIndex].slice(-8); // Keep last 8 notes
+    const newRecentNotes = [...recentNotes, noteIndex].slice(-16); // Keep last 16 notes for better analysis
     
     // Check for repeating patterns
     let patternScore = 0;
+    let musicalityBonus = 0;
     
     // Check for simple alternating patterns (A-B-A-B)
     if (newRecentNotes.length >= 4) {
       const last4 = newRecentNotes.slice(-4);
       if (last4[0] === last4[2] && last4[1] === last4[3] && last4[0] !== last4[1]) {
-        patternScore += 0.3; // QWE-type patterns
+        patternScore += 0.4; // Increased penalty for simple alternation
       }
     }
     
@@ -598,7 +701,7 @@ function MusicolourApp() {
       const first3 = last6.slice(0, 3);
       const second3 = last6.slice(3, 6);
       if (JSON.stringify(first3) === JSON.stringify(second3)) {
-        patternScore += 0.4; // Repeated sequences
+        patternScore += 0.5; // Increased penalty for exact repetition
       }
     }
     
@@ -606,11 +709,51 @@ function MusicolourApp() {
     if (newRecentNotes.length >= 3) {
       const last3 = newRecentNotes.slice(-3);
       if (last3.every(note => note === last3[0])) {
-        patternScore += 0.5; // Same key mashing
+        patternScore += 0.7; // Heavy penalty for same key mashing
       }
     }
     
-    return { newRecentNotes, patternScore };
+    // NEW: Check for musical intervals (reward musical patterns)
+    if (newRecentNotes.length >= 4) {
+      const intervals = [];
+      for (let i = 1; i < newRecentNotes.length; i++) {
+        intervals.push(newRecentNotes[i] - newRecentNotes[i-1]);
+      }
+      
+      // Check for musical intervals (2, 3, 4, 5, 7 semitones)
+      const musicalIntervals = [2, 3, 4, 5, 7, -2, -3, -4, -5, -7];
+      const musicalCount = intervals.filter(i => musicalIntervals.includes(i)).length;
+      if (musicalCount > intervals.length * 0.6) {
+        musicalityBonus = -0.3; // Reduce boredom for musical intervals
+      }
+      
+      // Check for random jumps (penalty for non-musical randomness)
+      const randomJumps = intervals.filter(i => Math.abs(i) > 8).length;
+      if (randomJumps > intervals.length * 0.3) {
+        patternScore += 0.3; // Penalty for random large jumps
+      }
+    }
+    
+    // NEW: Check for scale-like patterns (reward)
+    if (newRecentNotes.length >= 7) {
+      const last7 = newRecentNotes.slice(-7);
+      let isAscending = true;
+      let isDescending = true;
+      
+      for (let i = 1; i < last7.length; i++) {
+        if (last7[i] <= last7[i-1]) isAscending = false;
+        if (last7[i] >= last7[i-1]) isDescending = false;
+      }
+      
+      if (isAscending || isDescending) {
+        musicalityBonus = -0.4; // Reward scale-like patterns
+      }
+    }
+    
+    return { 
+      newRecentNotes, 
+      patternScore: Math.max(0, patternScore + musicalityBonus) 
+    };
   }, []);
 
   const updateSystemExcitement = useCallback((noteIndex, velocity = 0.5) => {
@@ -670,8 +813,8 @@ function MusicolourApp() {
       const distanceMultiplier = calculateDistanceMultiplier(noteIndex, prev.lastNoteIndex);
       
       // Apply pattern boredom and speed penalties
-      const patternPenalty = 1 - (newPatternBoredom * 0.8); // Up to 80% reduction for patterns
-      const speedPenaltyFactor = 1 - newSpeedPenalty; // Can go negative for very fast typing
+      const patternPenalty = 1 - (newPatternBoredom * params.patternPenaltyWeight); // Tunable pattern penalty
+      const speedPenaltyFactor = 1 - newSpeedPenalty * params.speedPenaltyWeight;
       
       // Get current region and check regional repetition
       const currentRegion = getKeyRegion(noteIndex);
@@ -687,21 +830,21 @@ function MusicolourApp() {
       let newRegionCounters = { ...prev.regionRepetitionCounters };
       
       if (isStayingInRegion && regionalHeat > 0) {
-        // More aggressive boredom - heat builds up and penalizes strongly
-        const heatPenalty = Math.min(0.6, regionalHeat * 0.15); // Cap penalty at 60%, stronger rate
-        const alpha = Math.max(0.3, distanceMultiplier - heatPenalty) * Math.max(0.7, thresholdFactor);
-        newRepetitionFactor = Math.max(0.2, prev.currentRepetitionFactor * alpha); // Lower floor at 20%
+        // Aggressive boredom penalties for repetition
+        const heatPenalty = Math.min(0.7, regionalHeat * params.repetitionHeatPenaltyFactor);
+        const alpha = Math.max(0.2, distanceMultiplier - heatPenalty) * Math.max(0.5, thresholdFactor);
+        newRepetitionFactor = Math.max(0.1, prev.currentRepetitionFactor * alpha); // Lower floor for harsh punishment
         
         // Faster heat accumulation for boredom
         influencedRegions.forEach(region => {
-          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1.0; // Build heat faster
+          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1.5; // Build heat even faster
         });
       } else {
-        newRepetitionFactor = Math.max(0.8, distanceMultiplier * Math.max(0.9, thresholdFactor));
+        newRepetitionFactor = Math.max(0.6, distanceMultiplier * Math.max(0.8, thresholdFactor));
         
-        // Faster heat decay when moving regions
+        // Slower heat decay when moving regions
         Object.keys(newRegionCounters).forEach(region => {
-          newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 1.5);
+          newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.5); // Slower decay
         });
         
         // Start fresh heat in new regions
@@ -746,13 +889,13 @@ function MusicolourApp() {
         speedPenalty: newSpeedPenalty
       };
     });
-  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, detectSpeedPunishment, adaptiveSystem]);
+  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, detectSpeedPunishment, adaptiveSystem, params]);
 
   // Pask's adaptive boredom decay system with threshold updates
   useEffect(() => {
     const decayInterval = setInterval(() => {
       setSystemState(prev => {
-        const decayRate = 0.12 / 60; // Slightly faster decay - takes ~8.3 seconds to decay from max to 0
+        const decayRate = params.excitementDecayRate / 60; // Tunable decay rate
         const newExcitement = Math.max(0, prev.excitement - decayRate);
         
         const timeSinceLastKey = Date.now() - (prev.lastKeyPressTime || 0);
@@ -812,49 +955,9 @@ function MusicolourApp() {
     }, 16);
 
     return () => clearInterval(decayInterval);
-  }, [adaptiveSystem]);
+  }, [adaptiveSystem, params]);
 
-  // Pask's adaptive color wheel - 8 segment color wheel
-  const getAdaptiveColor = useCallback((noteIndex, wheelPosition, excitementLevel, boredomBias) => {
-    const colorWheel = [
-      '#ff0000', // red
-      '#ffbf00', // amber  
-      '#80ff00', // yellow-green
-      '#00ff00', // green
-      '#00ffff', // cyan
-      '#0080ff', // blue
-      '#8000ff', // violet
-      '#ffffff'  // open-white
-    ];
-    
-    // Use wheel position to select color, with some randomness for emergent behavior
-    let baseColor = colorWheel[wheelPosition % 8];
-    
-    // Check if this note has a recent dynamic mapping
-    const mapping = adaptiveSystem.colorWheelMappings[noteIndex];
-    if (mapping && Date.now() - mapping.timestamp < 10000) { // 10 second memory
-      baseColor = colorWheel[mapping.wheelPosition % 8];
-    }
-    
-    // Apply boredom desaturation - when bored, colors become heavily muted
-    const boredomFactor = Math.max(0.05, 1 - boredomBias * 3); // Much more aggressive muting
-    const excitementFactor = Math.max(0.1, excitementLevel); // Lower floor for excitement
-    const colorIntensity = boredomFactor * excitementFactor;
-    
-    // Convert hex to RGB and apply intensity
-    const hex = baseColor.replace('#', '');
-    const r = parseInt(hex.substr(0, 2), 16);
-    const g = parseInt(hex.substr(2, 2), 16);
-    const b = parseInt(hex.substr(4, 2), 16);
-    
-    // When bored, blend towards gray
-    const gray = 128;
-    const newR = Math.round(r * colorIntensity + gray * (1 - colorIntensity));
-    const newG = Math.round(g * colorIntensity + gray * (1 - colorIntensity));
-    const newB = Math.round(b * colorIntensity + gray * (1 - colorIntensity));
-    
-    return `rgb(${newR}, ${newG}, ${newB})`;
-  }, [adaptiveSystem]);
+
 
   const handleKeyPress = useCallback((key) => {
     if (pressedKeys.has(key.note)) return;
@@ -871,48 +974,31 @@ function MusicolourApp() {
     // Update system with Pask's adaptive algorithm first
     updateSystemExcitement(noteIndex, velocity);
     
-    // Get adaptive color based on current wheel position, excitement, and boredom
-    const adaptiveColor = getAdaptiveColor(
-      noteIndex, 
-      systemState.noveltyEngine.wheelPosition,
-      systemState.excitement,
-      adaptiveSystem.boredomBias
-    );
-    
-    // Reduce intensity when bored - much more dramatic reduction
-    const boredomIntensityReduction = Math.max(0.02, 1 - adaptiveSystem.boredomBias * 1.5); // Much lower floor
-    const excitementIntensity = 0.1 + (systemState.excitement * 0.8); // Wider range
-    const intensity = excitementIntensity * boredomIntensityReduction;
-    
-    // Create effects based on excitement and boredom level
-    // When bored, create fewer, simpler effects
-    const shouldCreateEffect = Math.random() < boredomIntensityReduction;
-    
-    if (shouldCreateEffect) {
-      const baseX = (noteIndex - 8) * 1.2; // Wider spread
-      const randomOffset = (Math.random() - 0.5) * 4 * boredomIntensityReduction; // Less random when bored
-      const randomY = (Math.random() - 0.5) * 3 * boredomIntensityReduction;
+    // Trigger fluid splats based on excitement level
+    if (fluidCanvasRef.current) {
+      // Determine number of splats based on excitement level
+      let numSplats = 1;
+      if (systemState.excitement > 0.9) {
+        numSplats = 8;
+      } else if (systemState.excitement > 0.75) {
+        numSplats = 4;
+      } else if (systemState.excitement > 0.5) {
+        numSplats = 3;
+      } else if (systemState.excitement > 0.25) {
+        numSplats = 2;
+      }
       
-      const newEffect = {
-        id: Date.now() + Math.random(),
-        type: 'ripple',
-        position: [baseX + randomOffset, randomY, (Math.random() - 0.5) * 2],
-        color: adaptiveColor, // Use Pask's adaptive color with boredom desaturation
-        intensity,
-        note: key.note,
-        timestamp: Date.now(),
-        wheelPosition: systemState.noveltyEngine.wheelPosition,
-        boredomLevel: adaptiveSystem.boredomBias
-      };
-
-      setActiveEffects(prev => [...prev, newEffect]);
+      // Trigger multiple splats
+      for (let i = 0; i < numSplats; i++) {
+        fluidCanvasRef.current.triggerSplat(systemState.excitement);
+      }
     }
 
     // Auto-release after timeout if not manually released
     keyTimeouts.current.set(key.note, setTimeout(() => {
       handleKeyRelease(key);
     }, 500));
-  }, [pressedKeys, systemState.excitement, systemState.noveltyEngine.wheelPosition, updateSystemExcitement, getAdaptiveColor]);
+  }, [pressedKeys, systemState.excitement, systemState.noveltyEngine.wheelPosition, updateSystemExcitement]);
 
   const handleKeyRelease = useCallback((key) => {
     setPressedKeys(prev => {
@@ -932,142 +1018,42 @@ function MusicolourApp() {
     }
   }, []);
 
-  // Clean up old effects
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveEffects(prev => 
-        prev.filter(effect => Date.now() - effect.timestamp < 3000)
-      );
-    }, 1000);
 
-    return () => clearInterval(interval);
-  }, []);
 
   const getMoodData = () => {
     const excitement = systemState.excitement;
     
     if (excitement > 0.7) {
-      return { color: '#ff6b6b', mood: 'excited' };
+      return { color: getInterpolatedColor(excitement), mood: 'excited' };
     } else if (excitement < 0.2) {
-      return { color: '#6c757d', mood: 'bored' };
+      return { color: getInterpolatedColor(excitement), mood: 'bored' };
     } else {
-      return { color: '#4ecdc4', mood: 'neutral' };
+      return { color: getInterpolatedColor(excitement), mood: 'neutral' };
     }
   };
 
   return (
     <div className="w-full h-screen bg-black overflow-hidden relative">
+      <ParameterSliders paramDefs={paramDefs} params={params} onParamChange={handleParamChange} />
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-black tracking-tight mb-2" style={{ fontWeight: 900 }}>MUSICOLOUR</h1>
-        <h3 className=" font-black tracking-tight mb-2">by Gordon Pask</h3>aa
+        <h3 className=" tracking-tight">By Gui Dávid. Inspired by Gordon Pask.</h3>
       </div>
       
       {/* Power Bar */}
       <PowerBar excitement={systemState.excitement} />
 
-      {/* Instructions */}
-      <div className="absolute top-6 right-6 z-10 text-white text-right">
-        <div className="text-sm opacity-75 space-y-1 font-bold">
-          <div>Play the piano to create visual music</div>
-          <div>Use keyboard: Q-P (white keys), 2-0 (black keys)</div>
-          <div>System adapts to your musical patterns</div>
-          <div className="text-xs opacity-50 mt-2 space-y-1 font-extrabold">
-            <div>Repetition Factor: {systemState.currentRepetitionFactor.toFixed(3)}</div>
-            <div>Current Region: {systemState.lastRegion !== null ? systemState.lastRegion : 'None'}</div>
-            <div>Regional Heat: {systemState.lastRegion !== null ? 
-              getRegionalHeat(systemState.regionRepetitionCounters, systemState.lastNoteIndex || 0).toFixed(1) : '0.0'
-            }</div>
-            <div className="border-t border-white border-opacity-20 pt-1 mt-2">
-              <div>Active A-T Cell: {systemState.noveltyEngine.activeCell !== null ? systemState.noveltyEngine.activeCell : 'None'}</div>
-              <div>Max Novelty: {systemState.noveltyEngine.maxNoveltyScore.toFixed(3)}</div>
-              <div>Wheel Position: {systemState.noveltyEngine.wheelPosition}</div>
-              <div>Boredom Bias: {adaptiveSystem.boredomBias.toFixed(3)}</div>
-              {systemState.lastNoteIndex !== null && systemState.adaptiveThresholds[systemState.lastNoteIndex] && (
-                <div>Last Threshold: {systemState.adaptiveThresholds[systemState.lastNoteIndex].toFixed(3)}</div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
 
-      {/* 3D Canvas */}
+
+      {/* Fluid Canvas */}
       <div className="relative h-2/3">
-        <Canvas
-          camera={{ position: [0, 2, 8], fov: 75 }}
+        <FluidCanvas 
+          ref={fluidCanvasRef}
           className="w-full h-full"
-        >
-          <color attach="background" args={['#0f0f0f']} />
-          
-          {/* Lighting - much dimmer when bored */}
-          <ambientLight intensity={0.05 + 0.5 * (1 - adaptiveSystem.boredomBias * 1.2)} />
-          <pointLight 
-            position={[5, 5, 5]} 
-            intensity={0.1 + 0.7 * (1 - adaptiveSystem.boredomBias * 1.2)} 
-            color="#4ecdc4" 
-          />
-          <pointLight 
-            position={[-5, 5, 5]} 
-            intensity={0.1 + 0.7 * (1 - adaptiveSystem.boredomBias * 1.2)} 
-            color="#ff6b6b" 
-          />
+        />
+        
 
-          {/* Active visual effects */}
-          {activeEffects.map(effect => (
-            <group key={effect.id}>
-              <RippleEffect
-                position={effect.position}
-                color={effect.color}
-                intensity={effect.intensity}
-                note={effect.note}
-              />
-              <NoteParticles
-                note={effect.note}
-                color={effect.color}
-                position={effect.position}
-              />
-            </group>
-          ))}
-
-          {/* Background waves for currently pressed keys */}
-          {Array.from(pressedKeys).map(note => {
-            const key = PIANO_KEYS.find(k => k.note === note);
-            const noteIndex = PIANO_KEYS.findIndex(k => k.note === note);
-            
-            // Apply boredom-aware coloring and intensity to background waves too
-            const adaptiveColor = getAdaptiveColor(
-              noteIndex,
-              systemState.noveltyEngine.wheelPosition,
-              systemState.excitement,
-              adaptiveSystem.boredomBias
-            );
-            
-            const boredomIntensityReduction = Math.max(0.02, 1 - adaptiveSystem.boredomBias * 1.5);
-            const waveIntensity = systemState.excitement * boredomIntensityReduction;
-            
-            return (
-              <ColorWave
-                key={note}
-                color={adaptiveColor}
-                intensity={waveIntensity}
-                note={note}
-              />
-            );
-          })}
-
-          {/* System status text */}
-          <Text
-            position={[0, -1, 0]}
-            fontSize={0.3}
-            color={getMoodData().color}
-            anchorX="center"
-            anchorY="middle"
-          >
-            {pressedKeys.size > 0 ? '♪ Playing ♪' : `♪ ${getMoodData().mood.toUpperCase()} ♪`}
-          </Text>
-
-          <OrbitControls enableZoom={false} enablePan={false} />
-        </Canvas>
       </div>
 
       {/* Piano Interface */}

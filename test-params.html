@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Musicolour Parameter Testing</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #000;
+            color: #0f0;
+            padding: 20px;
+            white-space: pre-wrap;
+        }
+        .passed { color: #0f0; }
+        .failed { color: #f00; }
+        .header { color: #ff0; }
+    </style>
+</head>
+<body>
+    <h1 class="header">Musicolour Hyperparameter Testing</h1>
+    <div id="output"></div>
+    
+    <script type="module">
+        import { runTests } from './src/testMusicolourParams.js';
+        
+        // Capture console output
+        const output = document.getElementById('output');
+        const originalLog = console.log;
+        
+        console.log = function(...args) {
+            const text = args.join(' ');
+            const div = document.createElement('div');
+            
+            if (text.includes('PASSED')) {
+                div.className = 'passed';
+            } else if (text.includes('FAILED')) {
+                div.className = 'failed';
+            } else if (text.includes('===')) {
+                div.className = 'header';
+            }
+            
+            div.textContent = text;
+            output.appendChild(div);
+            originalLog.apply(console, args);
+        };
+        
+        // Run tests
+        try {
+            const results = runTests();
+            
+            // Add visual summary
+            const summary = document.createElement('div');
+            summary.className = 'header';
+            summary.style.marginTop = '20px';
+            summary.style.fontSize = '1.2em';
+            
+            const passed = results.filter(r => r.passed).length;
+            const total = results.length;
+            const percentage = (passed / total * 100).toFixed(0);
+            
+            summary.textContent = `\nOVERALL SCORE: ${percentage}% (${passed}/${total} tests passed)`;
+            output.appendChild(summary);
+            
+        } catch (error) {
+            console.error('Error running tests:', error);
+        }
+    </script>
+</body>
+</html> 
