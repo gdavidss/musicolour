@@ -935,10 +935,27 @@ function MusicolourApp() {
       const handleMidiMessage = (event) => {
         const [command, noteNumber, velocity] = event.data;
         const noteName = Tone.Frequency(noteNumber, 'midi').toNote();
-        const keyData = PIANO_KEYS.find(k => k.note === noteName);
-  
-        if (!keyData) return;
-  
+
+        // Helper: map any note (e.g. C2) to existing keyData shape using its pitch class
+        const getKeyDataForNote = (note) => {
+          const existing = PIANO_KEYS.find(k => k.note === note);
+          if (existing) return existing;
+
+          // Try match by pitch class (remove octave digit)
+          const pitchClass = note.replace(/\d/, '');
+          const baseKey = PIANO_KEYS.find(k => k.note.startsWith(pitchClass));
+          if (baseKey) {
+            return { ...baseKey, note }; // clone with new note name
+          }
+          // Fallback: use first key definition
+          return { ...PIANO_KEYS[0], note };
+        };
+
+        const keyData = getKeyDataForNote(noteName);
+
+        // Map unknown notes back to adaptive index based on their pitch class within current set
+        const mappedIndex = PIANO_KEYS.findIndex(k => k.note.startsWith(keyData.note.replace(/\d/, '')));
+
         if (command === 144 && velocity > 0) { // Note On
           handleKeyPress(keyData, velocity / 127);
         } else if (command === 128 || (command === 144 && velocity === 0)) { // Note Off
