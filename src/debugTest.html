@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Musicolour Debug Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        .test { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+        .pass { background: #d4edda; }
+        .fail { background: #f8d7da; }
+        button { margin: 5px; padding: 10px; }
+        #log { background: #f0f0f0; padding: 10px; height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>Musicolour Debug Test</h1>
+    
+    <div class="test">
+        <h2>Interactive Test</h2>
+        <button onclick="playDoReMiFa()">Play Do-Re-Mi-Fa</button>
+        <button onclick="playRandom()">Play Random</button>
+        <button onclick="reset()">Reset</button>
+        
+        <div id="status">
+            <p>Excitement: <span id="excitement">0</span></p>
+            <p>Musicality Score: <span id="musicality">0</span></p>
+            <p>Notes Played: <span id="noteCount">0</span></p>
+        </div>
+    </div>
+    
+    <div id="log"></div>
+
+    <script type="module">
+        import MusicalityEngine from './src/musicalityEngine.js';
+        
+        window.engine = new MusicalityEngine();
+        window.excitement = 0;
+        window.noteCount = 0;
+        window.logs = [];
+        
+        function log(message) {
+            window.logs.push(message);
+            document.getElementById('log').innerHTML = window.logs.join('<br>');
+            document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+        }
+        
+        function updateDisplay() {
+            document.getElementById('excitement').textContent = window.excitement.toFixed(3);
+            document.getElementById('musicality').textContent = window.engine.musicalityScore.toFixed(3);
+            document.getElementById('noteCount').textContent = window.noteCount;
+        }
+        
+        window.reset = function() {
+            window.engine.reset();
+            window.excitement = 0;
+            window.noteCount = 0;
+            window.logs = [];
+            document.getElementById('log').innerHTML = '';
+            updateDisplay();
+            log('System reset');
+        };
+        
+        window.playNote = function(noteIndex) {
+            const timestamp = Date.now();
+            const result = window.engine.processNote(noteIndex, timestamp);
+            
+            // Apply decay (0.002 per second since last note)
+            if (window.lastNoteTime) {
+                const timeSinceLastNote = (timestamp - window.lastNoteTime) / 1000;
+                const decay = timeSinceLastNote * 0.002;
+                window.excitement = Math.max(0, window.excitement - decay);
+                log(`Decay applied: -${decay.toFixed(4)} (${timeSinceLastNote.toFixed(1)}s since last note)`);
+            }
+            
+            // Add excitement
+            window.excitement = Math.min(1, window.excitement + result.excitement);
+            window.noteCount++;
+            window.lastNoteTime = timestamp;
+            
+            log(`Note ${noteIndex}: +${result.excitement.toFixed(4)} excitement, score=${result.score.toFixed(3)}`);
+            log(`Metrics: ${JSON.stringify(result.metrics, null, 2)}`);
+            
+            updateDisplay();
+            return result;
+        };
+        
+        window.playDoReMiFa = async function() {
+            log('=== Playing Do-Re-Mi-Fa ===');
+            const pattern = [0, 2, 4, 5]; // C D E F
+            
+            for (let i = 0; i < 8; i++) {
+                const note = pattern[i % 4];
+                window.playNote(note);
+                await new Promise(resolve => setTimeout(resolve, 375)); // 160 BPM
+            }
+            
+            log(`Final excitement: ${window.excitement.toFixed(3)}`);
+            log(`Final musicality: ${window.engine.musicalityScore.toFixed(3)}`);
+        };
+        
+        window.playRandom = async function() {
+            log('=== Playing Random Notes ===');
+            
+            for (let i = 0; i < 8; i++) {
+                const note = Math.floor(Math.random() * 17);
+                window.playNote(note);
+                await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 600));
+            }
+            
+            log(`Final excitement: ${window.excitement.toFixed(3)}`);
+            log(`Final musicality: ${window.engine.musicalityScore.toFixed(3)}`);
+        };
+        
+        // Initial display
+        updateDisplay();
+        log('Debug test ready. Click buttons to test.');
+    </script>
+</body>
+</html> 

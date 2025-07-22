@@ -2,125 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
 import FluidCanvas from './FluidCanvas';
 import { createFluidSimulation } from './webgl-fluid-wrapper';
-import ParameterSliders from './ParameterSliders';
+import MusicalityEngine from './musicalityEngine';
 
 // Initialize Tone.js
 Tone.start();
-
-// Regional repetition tracking helpers
-const getKeyRegion = (keyIndex) => {
-  // Divide 17 keys into overlapping regions of ~4 keys each
-  return Math.floor(keyIndex / 3); // Creates regions: 0-2=0, 3-5=1, 6-8=2, etc.
-};
-
-const getInfluencedRegions = (keyIndex) => {
-  // A key influences its own region and adjacent regions
-  const baseRegion = getKeyRegion(keyIndex);
-  const regions = [];
-  for (let r = baseRegion - 1; r <= baseRegion + 1; r++) {
-    if (r >= 0 && r <= Math.floor((PIANO_KEYS.length - 1) / 3)) {
-      regions.push(r);
-    }
-  }
-  return regions;
-};
-
-const getRegionalHeat = (regionCounters, keyIndex) => {
-  // Sum up repetition counts from all regions this key influences
-  const influencedRegions = getInfluencedRegions(keyIndex);
-  return influencedRegions.reduce((total, region) => {
-    return total + (regionCounters[region] || 0);
-  }, 0);
-};
-
-// Pask's Adaptive Band-Pass Filter
-class AdaptiveBandPassFilter {
-  constructor(centerFreq, bandwidth = 0.5) {
-    this.centerFreq = centerFreq; // MIDI note number
-    this.bandwidth = bandwidth; // octaves
-    this.lastRetune = Date.now();
-    this.retuneHistory = [];
-  }
-
-  // Calculate filter response with overlapping skirts
-  getResponse(inputFreq) {
-    const freqDistance = Math.abs(inputFreq - this.centerFreq);
-    const normalizedDistance = freqDistance / this.bandwidth;
-    
-    // Gaussian-like response with overlapping skirts (~½ octave each side)
-    return Math.exp(-0.5 * Math.pow(normalizedDistance, 2));
-  }
-
-  // Retune filter based on novelty competition
-  retune(targetFreq, maxShift = 2) {
-    const shift = Math.min(maxShift, Math.abs(targetFreq - this.centerFreq));
-    const direction = targetFreq > this.centerFreq ? 1 : -1;
-    
-    this.centerFreq += direction * shift * 0.1; // Gradual retuning
-    this.centerFreq = Math.max(0, Math.min(127, this.centerFreq)); // MIDI range
-    
-    this.retuneHistory.push({
-      timestamp: Date.now(),
-      oldFreq: this.centerFreq - direction * shift * 0.1,
-      newFreq: this.centerFreq
-    });
-    
-    this.lastRetune = Date.now();
-  }
-}
-
-// Pask's Adaptive Threshold Units (A-T cells)
-class AdaptiveThresholdCell {
-  constructor(id, initialThreshold = 0.5) {
-    this.id = id;
-    this.threshold = initialThreshold;
-    this.envelope = 0;
-    this.lastFiring = 0;
-    this.tau = 1000; // Time constant for threshold integration (ms)
-    this.k = 0.8; // Gain factor
-    this.lastUpdateTime = Date.now();
-    this.filter = new AdaptiveBandPassFilter(id * 7 + 60); // Spread filters across frequency range
-  }
-
-  // Threshold integrator: τ(dT/dt) = k[E(t) - T(t)]
-  updateThreshold(envelopeValue) {
-    const now = Date.now();
-    const dt = (now - this.lastUpdateTime) / 1000; // Convert to seconds
-    
-    if (dt > 0) {
-      const dT_dt = this.k * (envelopeValue - this.threshold);
-      this.threshold += (dT_dt * dt) / (this.tau / 1000);
-      this.threshold = Math.max(0.1, Math.min(1.0, this.threshold)); // Clamp
-    }
-    
-    this.envelope = envelopeValue;
-    this.lastUpdateTime = now;
-  }
-
-  // Check if cell fires (envelope exceeds adaptive threshold)
-  checkFiring() {
-    const fires = this.envelope > this.threshold;
-    if (fires) {
-      this.lastFiring = Date.now();
-    }
-    return fires;
-  }
-
-  // Get 1-bit output
-  getBitOutput() {
-    return this.checkFiring() ? 1 : 0;
-  }
-
-  // Get time since last firing (for boredom calculation)
-  getTimeSinceLastFiring() {
-    return Date.now() - this.lastFiring;
-  }
-}
-
-const isDistantRegion = (region1, region2, threshold = 2) => {
-  // Check if two regions are far enough apart to reset penalties
-  return region1 === null || Math.abs(region1 - region2) >= threshold;
-};
 
 // Piano key data
 const PIANO_KEYS = [
@@ -154,7 +39,7 @@ function PianoKey({ keyData, isPressed, onPress, onRelease }) {
       className={`
         piano-key cursor-pointer transition-all duration-75 select-none relative
         ${isBlack 
-          ? 'bg-gray-900 text-white h-24 w-7 mx-0 z-10 -ml-3 -mr-3' 
+          ? 'bg-gray-900 text-white h-24 w-8 z-20' 
           : 'bg-white text-gray-800 h-36 w-11 border border-gray-300'
         }
         ${isPressed ? (isBlack ? 'bg-gray-700' : 'bg-gray-100') : ''}
@@ -248,6 +133,8 @@ function PowerBar({ excitement = 0 }) {
   const [targetExcitement, setTargetExcitement] = useState(excitement);
   const animationRef = useRef();
   const lastUpdateTime = useRef(Date.now());
+  const recentGainRef = useRef(Date.now()); // Initialize to now to prevent immediate red
+  const lastExcitementRef = useRef(excitement);
   
   // Constants for animation
   const ANIMATION_SPEED = 0.3; // Units per second (0 to 1 scale)
@@ -255,6 +142,12 @@ function PowerBar({ excitement = 0 }) {
   // Update target when excitement changes
   useEffect(() => {
     setTargetExcitement(excitement);
+    
+    // Track if we gained excitement
+    if (excitement > lastExcitementRef.current) {
+      recentGainRef.current = Date.now();
+    }
+    lastExcitementRef.current = excitement;
   }, [excitement]);
   
   // Smooth animation loop
@@ -291,101 +184,52 @@ function PowerBar({ excitement = 0 }) {
         cancelAnimationFrame(animationId);
       }
     };
-  }, [targetExcitement]);
+      }, [targetExcitement]);
+    
+    // Calculate fill height as percentage
+    const fillHeight = displayExcitement * 100;
   
-  const getMoodLabel = (level) => {
-    if (level > 0.7) return 'EXCITED';
-    if (level < 0.2) return 'BORED';
-    return 'NEUTRAL';
-  };
-
-  const currentColor = getInterpolatedColor(displayExcitement);
-  const moodLabel = getMoodLabel(displayExcitement);
+  // Determine background color based on delta
+  let backgroundTint = 'rgba(0, 0, 0, 0.3)'; // default neutral
+  const delta = targetExcitement - displayExcitement;
+  const timeSinceGain = Date.now() - recentGainRef.current;
   
-  // Calculate fill heights
-  const fillHeight = Math.max(2, displayExcitement * 98 + 2);
-  const targetHeight = Math.max(2, targetExcitement * 98 + 2);
+  // Color logic
+  if (displayExcitement < 0.01) {
+    // Gray when excitement is essentially zero
+    backgroundTint = 'rgba(100, 100, 100, 0.2)';
+  } else if (timeSinceGain < 300) {
+    // Show green for 300ms after any gain
+    backgroundTint = 'rgba(0, 255, 0, 0.5)';
+  } else if (delta < 0 && timeSinceGain > 350) {
+    // Show red if we haven't gained in the last 350ms
+    backgroundTint = 'rgba(255, 0, 0, 0.3)';
+  } else {
+    // Default - very subtle black
+    backgroundTint = 'rgba(0, 0, 0, 0.2)';
+  }
 
   return (
-    <div className="fixed left-6 top-1/2 transform -translate-y-1/2 z-20">
-      {/* Thermometer container */}
-      <div className="relative w-8 h-96 bg-black bg-opacity-30 rounded-full border border-white border-opacity-20 overflow-hidden shadow-lg">
-        {/* Background grid */}
-        <div className="absolute inset-0">
-          {[...Array(10)].map((_, i) => (
-            <div
-              key={i}
-              className="absolute left-0 right-0 h-px bg-white opacity-10"
-              style={{ top: `${i * 10}%` }}
-            />
-          ))}
-        </div>
-        
-        {/* Main fill with smooth color transition */}
+    <div className="fixed left-0 top-0 h-full z-20" style={{ width: '8px' }}>
+      {/* Minimal excitement bar */}
+      <div className="relative w-full h-full bg-black bg-opacity-30">
+        {/* Negative space indicator */}
         <div
-          className="absolute bottom-0 left-0 right-0 rounded-full"
+          className="absolute top-0 left-0 right-0"
           style={{
-            height: `${fillHeight}%`,
-            backgroundColor: currentColor,
-            boxShadow: `0 0 20px ${currentColor}40`
+            height: `${100 - fillHeight}%`,
+            backgroundColor: backgroundTint,
+            transition: 'background-color 0.5s ease-out'
           }}
         />
-        
-        {/* Gain/Loss indicator with gradient */}
-        {Math.abs(targetExcitement - displayExcitement) > 0.01 && (
-          <>
-            {/* Soft gradient fill between current and target */}
-            <div
-              className="absolute left-0 right-0 rounded-full pointer-events-none"
-              style={{
-                bottom: Math.min(fillHeight, targetHeight) + '%',
-                height: Math.abs(targetHeight - fillHeight) + '%',
-                background: `linear-gradient(${targetExcitement > displayExcitement ? 'to top' : 'to bottom'}, 
-                  ${currentColor}00 0%, 
-                  ${currentColor}20 20%, 
-                  ${currentColor}30 50%, 
-                  ${currentColor}20 80%, 
-                  ${currentColor}00 100%)`,
-                opacity: Math.min(0.8, Math.abs(targetExcitement - displayExcitement) * 2),
-                transition: 'opacity 0.3s ease-out'
-              }}
-            />
-            
-            {/* Target position indicator */}
-            <div
-              className="absolute left-0 right-0 h-0.5 rounded-full"
-              style={{
-                bottom: `${targetHeight}%`,
-                backgroundColor: getInterpolatedColor(targetExcitement),
-                opacity: Math.min(0.9, Math.abs(targetExcitement - displayExcitement) * 3),
-                boxShadow: `0 0 8px ${getInterpolatedColor(targetExcitement)}`,
-                transform: 'translateY(50%)',
-                transition: 'opacity 0.2s ease-out',
-                animation: Math.abs(targetExcitement - displayExcitement) > 0.05 ? 'subtlePulse 1.5s ease-in-out infinite' : 'none'
-              }}
-            />
-          </>
-        )}
-        
-        {/* Glow effect */}
+        {/* Main fill */}
         <div
-          className="absolute bottom-0 left-0 right-0 opacity-60 rounded-full blur-sm"
+          className="absolute bottom-0 left-0 right-0"
           style={{
             height: `${fillHeight}%`,
-            backgroundColor: currentColor
+            backgroundColor: 'white'
           }}
         />
-      </div>
-      
-      {/* Label */}
-      <div 
-        className="text-xs font-mono mt-2 text-center font-black tracking-wide transition-all duration-300"
-        style={{ 
-          color: currentColor, 
-          fontWeight: 900
-        }}
-      >
-        {moodLabel}
       </div>
     </div>
   );
@@ -393,10 +237,8 @@ function PowerBar({ excitement = 0 }) {
 
 function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
   return (
-    <div className="piano-container flex justify-center items-end bg-gradient-to-t from-gray-900 to-gray-800 p-6 rounded-lg shadow-2xl border border-gray-600" style={{
-      boxShadow: '0 10px 40px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)'
-    }}>
-      <div className="flex relative" style={{
+    <div className="piano-container flex justify-center items-end bg-transparent overflow-visible">
+      <div className="relative inline-flex" style={{
         transform: 'perspective(800px) rotateX(5deg)',
         transformStyle: 'preserve-3d'
       }}>
@@ -409,18 +251,35 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
             onRelease={() => onKeyRelease(key)}
           />
         ))}
-        <div className="absolute top-0 left-0 flex">
+        <div className="absolute top-0 left-0 right-0" style={{ pointerEvents: 'none' }}>
           {PIANO_KEYS.filter(k => k.type === 'black').map((key, index) => {
-            const whiteKeyIndex = PIANO_KEYS.filter(k => k.type === 'white').findIndex(wk => 
-              PIANO_KEYS.indexOf(wk) < PIANO_KEYS.indexOf(key)
-            );
-            const offset = (whiteKeyIndex + 1) * 44 - 14; // 44px = white key width, adjust for black key positioning
+            // Map each black key to the white key it appears after
+            const blackKeyAfterWhite = {
+              'C#4': 'C4',
+              'D#4': 'D4',
+              'F#4': 'F4',
+              'G#4': 'G4',
+              'A#4': 'A4',
+              'C#5': 'C5',
+              'D#5': 'D5',
+            };
+            
+            const whiteKeys = PIANO_KEYS.filter(k => k.type === 'white');
+            const afterWhiteKey = blackKeyAfterWhite[key.note];
+            const whiteKeyIndex = whiteKeys.findIndex(wk => wk.note === afterWhiteKey);
+            
+            // Position black key between white keys
+            // Black keys are 32px wide (w-8 = 2rem = 32px), white keys are 44px wide (w-11)
+            const offset = (whiteKeyIndex + 1) * 44 - 16; // Position at right edge of white key minus half black key width
             
             return (
               <div
                 key={key.note}
-                style={{ marginLeft: `${offset}px` }}
-                className="absolute"
+                style={{ 
+                  left: `${offset}px`, 
+                  pointerEvents: 'auto'
+                }}
+                className="absolute top-0 z-20"
               >
                 <PianoKey
                   keyData={key}
@@ -442,67 +301,36 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
 function MusicolourApp() {
   const [pressedKeys, setPressedKeys] = useState(new Set());
   const fluidCanvasRef = useRef(null);
+  const musicalityEngineRef = useRef(new MusicalityEngine());
   
   // ---------------- TUNABLE PARAMETERS ----------------
-  const paramDefs = {
-    baseExcitementBase: { label: 'Base Excitement', min: 0, max: 0.05, step: 0.001, default: 0.01 },
-    baseExcitementDistanceScale: { label: 'Distance Scale', min: 0, max: 0.05, step: 0.001, default: 0.015 },
-    noveltyMultiplier: { label: 'Novelty Multiplier', min: 0, max: 1, step: 0.01, default: 0.2 },
-    distanceMultiplierMin: { label: 'Dist Mult Min', min: 0.4, max: 1, step: 0.01, default: 0.7 },
-    distanceMultiplierScale: { label: 'Dist Mult Scale', min: 0, max: 1, step: 0.01, default: 0.25 },
-    patternPenaltyWeight: { label: 'Pattern Penalty', min: 0, max: 2, step: 0.01, default: 0.8 },
-    speedPenaltyWeight: { label: 'Speed Penalty', min: 0, max: 2, step: 0.01, default: 1 },
-    excitementDecayRate: { label: 'Decay Rate', min: 0.05, max: 0.5, step: 0.01, default: 0.15 },
-    repetitionHeatPenaltyFactor: { label: 'Heat Penalty', min: 0, max: 0.5, step: 0.01, default: 0.15 }
-  };
-
-  const [params, setParams] = useState(() => {
-    const initial = {};
-    Object.entries(paramDefs).forEach(([key, def]) => {
-      initial[key] = def.default;
-    });
-    return initial;
-  });
-
-  const handleParamChange = useCallback((key, value) => {
-    setParams(prev => ({ ...prev, [key]: value }));
-  }, []);
-
-  // Initialize Pask's adaptive system (restored)
-  const [adaptiveSystem] = useState(() => {
-    const cells = {};
-    PIANO_KEYS.forEach((key, index) => {
-      cells[index] = new AdaptiveThresholdCell(index, 0.3 + Math.random() * 0.2);
-    });
-    return {
-      cells,
-      noveltyScores: {},
-      lastWheelPosition: 0,
-      boredomBias: 0,
-      colorWheelMappings: {}, // Dynamic color mappings
-      wheelUsageHistory: new Array(8).fill(0), // Track wheel position usage
-    };
-  });
-  // ----------------------------------------------------
+  // Simplified parameters for musicality-based system
+  const [showDebug, setShowDebug] = useState(false);
+  const [showKeyboard, setShowKeyboard] = useState(true);
+  const [showToggleButton, setShowToggleButton] = useState(false);
+  const [showBottomButton, setShowBottomButton] = useState(false);
+  const hideButtonTimeout = useRef(null);
+  const showButtonTimeout = useRef(null);
   
   const [systemState, setSystemState] = useState({
     excitement: 0, // 0 to 1 scale
-    lastNoteIndex: null,
     lastKeyPressTime: null,
-    regionRepetitionCounters: {}, // Track repetition per region
-    currentRepetitionFactor: 1.0, // Multiplication factor for current region
-    lastRegion: null, // Track which region was last played
-    adaptiveThresholds: {}, // Store current adaptive thresholds
-    noveltyEngine: {
-      activeCell: null,
-      maxNoveltyScore: 0,
-      wheelPosition: 0
-    },
-    recentNotes: [], // Track recent note sequence for pattern detection
-    patternBoredom: 0, // Track boredom from repetitive patterns
-    lastKeyTimes: [], // Track timing of recent key presses
-    speedPenalty: 0 // Penalty for playing too fast
+    musicalityScore: 0,
+    musicalityMetrics: {
+      melodicCoherence: 0,
+      harmonicProgression: 0,
+      rhythmicConsistency: 0,
+      scaleAdherence: 0,
+      phraseStructure: 0,
+      dynamicVariation: 0
+    }
   });
+  
+  // Use ref to access current state in callbacks
+  const systemStateRef = useRef(systemState);
+  useEffect(() => {
+    systemStateRef.current = systemState;
+  }, [systemState]);
 
   const pianoRef = useRef(null);
   const keyTimeouts = useRef(new Map());
@@ -540,6 +368,18 @@ function MusicolourApp() {
   // Keyboard event handling
   useEffect(() => {
     const handleKeyDown = (event) => {
+      // Toggle debug with 'D' key
+      if (event.code === 'KeyD' && event.shiftKey) {
+        setShowDebug(prev => !prev);
+        return;
+      }
+      
+      // Toggle keyboard with 'K' key
+      if (event.code === 'KeyK' && event.shiftKey) {
+        setShowKeyboard(prev => !prev);
+        return;
+      }
+      
       const key = PIANO_KEYS.find(k => k.keyCode === event.code);
       if (key && !pressedKeys.has(key.note)) {
         handleKeyPress(key);
@@ -562,401 +402,70 @@ function MusicolourApp() {
     };
   });
 
-  // Pask's Novelty Engine - calculates novelty scores for each cell
-  const calculateNoveltyScores = useCallback((triggeredCellIndex, envelopeValue) => {
-    const scores = {};
-    const K = PIANO_KEYS.length - 1; // Number of other cells
-    const lambda = 0.0001; // Penalty factor for recent usage
+  // New musicality-based update system
+  const updateSystemExcitement = useCallback((noteIndex, velocity = 0.5) => {
+    const timestamp = Date.now();
     
-    PIANO_KEYS.forEach((_, i) => {
-      const cell = adaptiveSystem.cells[i];
-      
-      // Update cell threshold based on current envelope
-      const normalizedEnvelope = i === triggeredCellIndex ? envelopeValue : 0;
-      cell.updateThreshold(normalizedEnvelope);
-      
-      // Calculate novelty score: N_i(t) = (1/K)Σ|b_i(t) - b_j(t)| - λ(t - t_last_i)
-      let differenceSum = 0;
-      const currentBit = cell.getBitOutput();
-      
-      // Sum differences with all other cells
-      PIANO_KEYS.forEach((_, j) => {
-        if (i !== j) {
-          const otherBit = adaptiveSystem.cells[j].getBitOutput();
-          differenceSum += Math.abs(currentBit - otherBit);
-        }
-      });
-      
-      const avgDifference = differenceSum / K;
-      const timePenalty = lambda * cell.getTimeSinceLastFiring();
-      
-      scores[i] = avgDifference - timePenalty;
+    // Process note through musicality engine
+    const musicalityResult = musicalityEngineRef.current.processNote(noteIndex, timestamp, velocity);
+    
+    console.log('Update system excitement:', {
+      noteIndex,
+      musicalityResult,
+      currentExcitement: systemState.excitement,
+      timestamp
     });
     
-    return scores;
-  }, [adaptiveSystem]);
-
-  // Calculate base excitement increase based on novelty
-  const calculateBaseExcitementIncrease = useCallback((currentNoteIndex, lastNoteIndex, noveltyScore) => {
-    if (lastNoteIndex === null) return params.baseExcitementBase; // Tunable initial value
-    
-    // Base excitement now influenced by novelty score
-    const distance = Math.abs(currentNoteIndex - lastNoteIndex);
-    const maxDistance = PIANO_KEYS.length - 1;
-    const normalizedDistance = distance / maxDistance;
-    
-    // Combine distance-based excitement with novelty - tuned for 60-second goal
-    const distanceExcitement = params.baseExcitementBase + params.baseExcitementDistanceScale * (1 - Math.exp(-3 * normalizedDistance));
-    const noveltyMultiplier = 1 + Math.max(0, noveltyScore) * params.noveltyMultiplier;
-    
-    return distanceExcitement * noveltyMultiplier;
-  }, [params]);
-
-  // Calculate distance-based multiplication factor
-  const calculateDistanceMultiplier = useCallback((currentNoteIndex, lastNoteIndex) => {
-    if (lastNoteIndex === null) return 1.0;
-    
-    const distance = Math.abs(currentNoteIndex - lastNoteIndex);
-    const maxDistance = PIANO_KEYS.length - 1;
-    
-    // Distance multiplier: close notes get much gentler penalty
-    // Adjacent keys (distance=1) get ~0.75, far keys get ~0.95
-    const normalizedDistance = distance / maxDistance;
-    return params.distanceMultiplierMin + params.distanceMultiplierScale * normalizedDistance;
-  }, [params]);
-
-  // Detect speed punishment - playing too fast reduces excitement
-  const detectSpeedPunishment = useCallback((lastKeyTimes) => {
-    const now = Date.now();
-    const newKeyTimes = [...lastKeyTimes, now].slice(-10); // Keep last 10 key times for better analysis
-    
-    let speedPenalty = 0;
-    let speedBonus = 0;
-    
-    if (newKeyTimes.length >= 3) {
-      // Calculate intervals between recent keys
-      const intervals = [];
-      for (let i = 1; i < newKeyTimes.length; i++) {
-        intervals.push(newKeyTimes[i] - newKeyTimes[i - 1]);
-      }
-      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      
-      // Check interval consistency (musical rhythm vs random mashing)
-      const intervalVariance = intervals.reduce((sum, interval) => {
-        return sum + Math.pow(interval - avgInterval, 2);
-      }, 0) / intervals.length;
-      const intervalStdDev = Math.sqrt(intervalVariance);
-      
-      // Punish if average interval is less than 100ms (very fast)
-      if (avgInterval < 100) {
-        speedPenalty = Math.min(0.8, (100 - avgInterval) / 100 * 0.8); // Increased penalty
-        
-        // Extra penalty for inconsistent fast playing (mashing)
-        if (intervalStdDev > avgInterval * 0.5) {
-          speedPenalty += 0.3;
-        }
-      }
-      
-      // Severe punishment for extremely fast playing (< 60ms)
-      if (avgInterval < 60) {
-        speedPenalty += 0.6; // Increased penalty
-      }
-      
-      // Complete punishment for key mashing (< 30ms)
-      if (avgInterval < 30) {
-        speedPenalty = 1.5; // Even higher penalty
-      }
-      
-      // NEW: Reward consistent rhythmic playing (musical timing)
-      if (avgInterval > 150 && avgInterval < 500 && intervalStdDev < avgInterval * 0.2) {
-        speedBonus = -0.1; // Small bonus for rhythmic consistency
-      }
-    }
-    
-    return { 
-      newKeyTimes, 
-      speedPenalty: Math.max(0, speedPenalty + speedBonus) 
-    };
-  }, []);
-
-  // Detect repetitive patterns in note sequences - enhanced for musical detection
-  const detectPatternBoredom = useCallback((noteIndex, recentNotes) => {
-    const newRecentNotes = [...recentNotes, noteIndex].slice(-16); // Keep last 16 notes for better analysis
-    
-    // Check for repeating patterns
-    let patternScore = 0;
-    let musicalityBonus = 0;
-    
-    // Check for simple alternating patterns (A-B-A-B)
-    if (newRecentNotes.length >= 4) {
-      const last4 = newRecentNotes.slice(-4);
-      if (last4[0] === last4[2] && last4[1] === last4[3] && last4[0] !== last4[1]) {
-        patternScore += 0.4; // Increased penalty for simple alternation
-      }
-    }
-    
-    // Check for sequential runs (1-2-3-1-2-3)
-    if (newRecentNotes.length >= 6) {
-      const last6 = newRecentNotes.slice(-6);
-      const first3 = last6.slice(0, 3);
-      const second3 = last6.slice(3, 6);
-      if (JSON.stringify(first3) === JSON.stringify(second3)) {
-        patternScore += 0.5; // Increased penalty for exact repetition
-      }
-    }
-    
-    // Check for same note repetition
-    if (newRecentNotes.length >= 3) {
-      const last3 = newRecentNotes.slice(-3);
-      if (last3.every(note => note === last3[0])) {
-        patternScore += 0.7; // Heavy penalty for same key mashing
-      }
-    }
-    
-    // NEW: Check for musical intervals (reward musical patterns)
-    if (newRecentNotes.length >= 4) {
-      const intervals = [];
-      for (let i = 1; i < newRecentNotes.length; i++) {
-        intervals.push(newRecentNotes[i] - newRecentNotes[i-1]);
-      }
-      
-      // Check for musical intervals (2, 3, 4, 5, 7 semitones)
-      const musicalIntervals = [2, 3, 4, 5, 7, -2, -3, -4, -5, -7];
-      const musicalCount = intervals.filter(i => musicalIntervals.includes(i)).length;
-      if (musicalCount > intervals.length * 0.6) {
-        musicalityBonus = -0.3; // Reduce boredom for musical intervals
-      }
-      
-      // Check for random jumps (penalty for non-musical randomness)
-      const randomJumps = intervals.filter(i => Math.abs(i) > 8).length;
-      if (randomJumps > intervals.length * 0.3) {
-        patternScore += 0.3; // Penalty for random large jumps
-      }
-    }
-    
-    // NEW: Check for scale-like patterns (reward)
-    if (newRecentNotes.length >= 7) {
-      const last7 = newRecentNotes.slice(-7);
-      let isAscending = true;
-      let isDescending = true;
-      
-      for (let i = 1; i < last7.length; i++) {
-        if (last7[i] <= last7[i-1]) isAscending = false;
-        if (last7[i] >= last7[i-1]) isDescending = false;
-      }
-      
-      if (isAscending || isDescending) {
-        musicalityBonus = -0.4; // Reward scale-like patterns
-      }
-    }
-    
-    return { 
-      newRecentNotes, 
-      patternScore: Math.max(0, patternScore + musicalityBonus) 
-    };
-  }, []);
-
-  const updateSystemExcitement = useCallback((noteIndex, velocity = 0.5) => {
     setSystemState(prev => {
-      // Detect speed punishment
-      const { newKeyTimes, speedPenalty } = detectSpeedPunishment(prev.lastKeyTimes);
-      const newSpeedPenalty = Math.min(1, prev.speedPenalty + speedPenalty);
+      // Add excitement based on musicality
+      const excitementIncrease = musicalityResult.excitement;
+      const newExcitement = Math.max(0, Math.min(1, prev.excitement + excitementIncrease));
       
-      // Detect pattern boredom
-      const { newRecentNotes, patternScore } = detectPatternBoredom(noteIndex, prev.recentNotes);
-      const newPatternBoredom = Math.min(1, prev.patternBoredom + patternScore);
-      
-      // Calculate novelty scores for all cells
-      const noveltyScores = calculateNoveltyScores(noteIndex, velocity);
-      const currentNoveltyScore = noveltyScores[noteIndex] || 0;
-      
-      // Find the cell with highest novelty score
-      let maxNoveltyCell = null;
-      let maxNoveltyScore = -Infinity;
-      Object.entries(noveltyScores).forEach(([cellIndex, score]) => {
-        if (score > maxNoveltyScore && score > adaptiveSystem.boredomBias) {
-          maxNoveltyScore = score;
-          maxNoveltyCell = parseInt(cellIndex);
-        }
-      });
-      
-      // Update color wheel position based on novelty winner
-      let newWheelPosition = prev.noveltyEngine.wheelPosition;
-      if (maxNoveltyCell !== null) {
-        // Find least recently used wheel position
-        const leastUsedPosition = adaptiveSystem.wheelUsageHistory.indexOf(
-          Math.min(...adaptiveSystem.wheelUsageHistory)
-        );
-        
-        newWheelPosition = leastUsedPosition;
-        adaptiveSystem.wheelUsageHistory[leastUsedPosition]++;
-        
-        // Create dynamic color mapping for this note
-        adaptiveSystem.colorWheelMappings[noteIndex] = {
-          wheelPosition: newWheelPosition,
-          timestamp: Date.now(),
-          noveltyScore: maxNoveltyScore
-        };
-        
-        // Reset boredom bias after successful competition
-        adaptiveSystem.boredomBias = 0;
-      } else {
-        // Increase boredom bias when no cell wins competition
-        adaptiveSystem.boredomBias = Math.min(1, adaptiveSystem.boredomBias + 0.01);
-      }
-      
-      // Add pattern and speed boredom to visual boredom bias
-      const totalBoredom = newPatternBoredom + newSpeedPenalty;
-      adaptiveSystem.boredomBias = Math.min(1, adaptiveSystem.boredomBias + totalBoredom * 0.3);
-      
-      const baseIncrease = calculateBaseExcitementIncrease(noteIndex, prev.lastNoteIndex, currentNoveltyScore);
-      const distanceMultiplier = calculateDistanceMultiplier(noteIndex, prev.lastNoteIndex);
-      
-      // Apply pattern boredom and speed penalties
-      const patternPenalty = 1 - (newPatternBoredom * params.patternPenaltyWeight); // Tunable pattern penalty
-      const speedPenaltyFactor = 1 - newSpeedPenalty * params.speedPenaltyWeight;
-      
-      // Get current region and check regional repetition
-      const currentRegion = getKeyRegion(noteIndex);
-      const influencedRegions = getInfluencedRegions(noteIndex);
-      const regionalHeat = getRegionalHeat(prev.regionRepetitionCounters, noteIndex);
-      
-      // Apply Pask's boredom: reduce repetition factor based on adaptive thresholds
-      const currentCell = adaptiveSystem.cells[noteIndex];
-      const thresholdFactor = 1 - Math.min(0.6, (currentCell.threshold - 0.1) / 0.9 * 0.6); // Stronger threshold influence
-      
-      const isStayingInRegion = !isDistantRegion(prev.lastRegion, currentRegion);
-      let newRepetitionFactor;
-      let newRegionCounters = { ...prev.regionRepetitionCounters };
-      
-      if (isStayingInRegion && regionalHeat > 0) {
-        // Aggressive boredom penalties for repetition
-        const heatPenalty = Math.min(0.7, regionalHeat * params.repetitionHeatPenaltyFactor);
-        const alpha = Math.max(0.2, distanceMultiplier - heatPenalty) * Math.max(0.5, thresholdFactor);
-        newRepetitionFactor = Math.max(0.1, prev.currentRepetitionFactor * alpha); // Lower floor for harsh punishment
-        
-        // Faster heat accumulation for boredom
-        influencedRegions.forEach(region => {
-          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1.5; // Build heat even faster
-        });
-      } else {
-        newRepetitionFactor = Math.max(0.6, distanceMultiplier * Math.max(0.8, thresholdFactor));
-        
-        // Slower heat decay when moving regions
-        Object.keys(newRegionCounters).forEach(region => {
-          newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.5); // Slower decay
-        });
-        
-        // Start fresh heat in new regions
-        influencedRegions.forEach(region => {
-          newRegionCounters[region] = (newRegionCounters[region] || 0) + 0.5;
-        });
-      }
-      
-      let finalIncrease = baseIncrease * newRepetitionFactor * patternPenalty * speedPenaltyFactor;
-      
-      // If penalties are severe, make excitement actually decrease
-      const totalPenalty = (1 - patternPenalty) + (1 - speedPenaltyFactor) + (1 - newRepetitionFactor);
-      if (totalPenalty > 1.0) {
-        finalIncrease = -0.02; // Active punishment - excitement goes down
-      }
-      
-      const newExcitement = Math.max(0, Math.min(1, prev.excitement + finalIncrease));
-      
-      // Update adaptive thresholds state for UI display
-      const adaptiveThresholds = {};
-      Object.entries(adaptiveSystem.cells).forEach(([index, cell]) => {
-        adaptiveThresholds[index] = cell.threshold;
+      console.log('State update:', {
+        prevExcitement: prev.excitement,
+        excitementIncrease,
+        newExcitement,
+        musicalityScore: musicalityResult.score
       });
       
       return {
         ...prev,
         excitement: newExcitement,
-        lastNoteIndex: noteIndex,
-        lastKeyPressTime: Date.now(),
-        regionRepetitionCounters: newRegionCounters,
-        currentRepetitionFactor: newRepetitionFactor,
-        lastRegion: currentRegion,
-        adaptiveThresholds,
-        noveltyEngine: {
-          activeCell: maxNoveltyCell,
-          maxNoveltyScore: maxNoveltyScore,
-          wheelPosition: newWheelPosition
-        },
-        recentNotes: newRecentNotes,
-        patternBoredom: newPatternBoredom,
-        lastKeyTimes: newKeyTimes,
-        speedPenalty: newSpeedPenalty
+        lastKeyPressTime: timestamp,
+        musicalityScore: musicalityResult.score,
+        musicalityMetrics: musicalityResult.metrics
       };
     });
-  }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, detectSpeedPunishment, adaptiveSystem, params]);
+  }, []);
 
-  // Pask's adaptive boredom decay system with threshold updates
+  // Simple decay system
   useEffect(() => {
     const decayInterval = setInterval(() => {
       setSystemState(prev => {
-        const decayRate = params.excitementDecayRate / 60; // Tunable decay rate
-        const newExcitement = Math.max(0, prev.excitement - decayRate);
-        
-        const timeSinceLastKey = Date.now() - (prev.lastKeyPressTime || 0);
-        let newRepetitionFactor = prev.currentRepetitionFactor;
-        let newRegionCounters = { ...prev.regionRepetitionCounters };
-        
-        // Update all adaptive threshold cells even when idle
-        Object.values(adaptiveSystem.cells).forEach(cell => {
-          cell.updateThreshold(0); // No envelope input when idle
-        });
-        
-        // Decay wheel usage history over time (forgetting mechanism)
-        adaptiveSystem.wheelUsageHistory = adaptiveSystem.wheelUsageHistory.map(usage => 
-          Math.max(0, usage - 0.001)
-        );
-        
-        // Decay pattern boredom and speed penalty over time (declare early)
-        const newPatternBoredom = Math.max(0, prev.patternBoredom - 0.01);
-        const newSpeedPenalty = Math.max(0, prev.speedPenalty - 0.02); // Faster decay for speed penalty
-        
-        // Increase boredom bias gradually when no input, but decay when patterns/speed improve
-        if (timeSinceLastKey > 500) {
-          adaptiveSystem.boredomBias = Math.min(0.5, adaptiveSystem.boredomBias + 0.002);
-        } else {
-          // Decay boredom bias when actively playing with good patterns/speed
-          const totalBoredomLevel = newPatternBoredom + newSpeedPenalty;
-          if (totalBoredomLevel < 0.3) {
-            adaptiveSystem.boredomBias = Math.max(0, adaptiveSystem.boredomBias - 0.01);
-          }
-        }
-        
-        if (timeSinceLastKey > 800) { // Faster recovery
-          newRepetitionFactor = Math.min(1.0, newRepetitionFactor + 0.02); // Faster factor recovery
-          
-          // Faster heat cooling
-          Object.keys(newRegionCounters).forEach(region => {
-            newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.05);
-          });
-        }
-        
-        // Update adaptive thresholds for UI
-        const adaptiveThresholds = {};
-        Object.entries(adaptiveSystem.cells).forEach(([index, cell]) => {
-          adaptiveThresholds[index] = cell.threshold;
-        });
+        // Decay rate: 0.002 per second, but we're running at 60 FPS
+        const decayRatePerSecond = 0.002;
+        const decayRatePerFrame = decayRatePerSecond / 60; // Divide by FPS
+        const newExcitement = Math.max(0, prev.excitement - decayRatePerFrame);
         
         return {
           ...prev,
-          excitement: newExcitement,
-          currentRepetitionFactor: newRepetitionFactor,
-          regionRepetitionCounters: newRegionCounters,
-          adaptiveThresholds,
-          patternBoredom: newPatternBoredom,
-          speedPenalty: newSpeedPenalty
+          excitement: newExcitement
         };
       });
-    }, 16);
+    }, 16); // 60 FPS
 
     return () => clearInterval(decayInterval);
-  }, [adaptiveSystem, params]);
+  }, []);
 
+  // Test fluid simulation on mount
+  useEffect(() => {
+    setTimeout(() => {
+      if (fluidCanvasRef.current) {
+        console.log('Testing fluid simulation...');
+        fluidCanvasRef.current.triggerSplat(0.5);
+      }
+    }, 1000);
+  }, []);
 
 
   const handleKeyPress = useCallback((key) => {
@@ -976,29 +485,39 @@ function MusicolourApp() {
     
     // Trigger fluid splats based on excitement level
     if (fluidCanvasRef.current) {
+      const currentState = systemStateRef.current;
+      
       // Determine number of splats based on excitement level
       let numSplats = 1;
-      if (systemState.excitement > 0.9) {
+      if (currentState.excitement > 0.9) {
         numSplats = 8;
-      } else if (systemState.excitement > 0.75) {
+      } else if (currentState.excitement > 0.75) {
         numSplats = 4;
-      } else if (systemState.excitement > 0.5) {
+      } else if (currentState.excitement > 0.5) {
         numSplats = 3;
-      } else if (systemState.excitement > 0.25) {
+      } else if (currentState.excitement > 0.25) {
         numSplats = 2;
       }
       
+      console.log('Triggering splats:', {
+        excitement: currentState.excitement,
+        numSplats,
+        musicalityScore: currentState.musicalityScore
+      });
+      
       // Trigger multiple splats
       for (let i = 0; i < numSplats; i++) {
-        fluidCanvasRef.current.triggerSplat(systemState.excitement);
+        fluidCanvasRef.current.triggerSplat(currentState.excitement);
       }
+    } else {
+      console.warn('fluidCanvasRef.current is null');
     }
 
     // Auto-release after timeout if not manually released
     keyTimeouts.current.set(key.note, setTimeout(() => {
       handleKeyRelease(key);
     }, 500));
-  }, [pressedKeys, systemState.excitement, systemState.noveltyEngine.wheelPosition, updateSystemExcitement]);
+  }, [pressedKeys, updateSystemExcitement]);
 
   const handleKeyRelease = useCallback((key) => {
     setPressedKeys(prev => {
@@ -1032,38 +551,158 @@ function MusicolourApp() {
     }
   };
 
+  // Handle hover for show button
+  const handleShowButtonHover = useCallback(() => {
+    if (hideButtonTimeout.current) {
+      clearTimeout(hideButtonTimeout.current);
+    }
+    setShowToggleButton(true);
+  }, []);
+
+  const handleShowButtonLeave = useCallback(() => {
+    if (hideButtonTimeout.current) {
+      clearTimeout(hideButtonTimeout.current);
+    }
+    hideButtonTimeout.current = setTimeout(() => {
+      setShowToggleButton(false);
+    }, 3000); // 3 seconds delay
+  }, []);
+
+  // Show button briefly when keyboard is hidden
+  useEffect(() => {
+    if (!showKeyboard) {
+      // Wait for keyboard animation to complete before showing bottom button
+      if (showButtonTimeout.current) {
+        clearTimeout(showButtonTimeout.current);
+      }
+      showButtonTimeout.current = setTimeout(() => {
+        setShowBottomButton(true);
+        setShowToggleButton(true);
+        if (hideButtonTimeout.current) {
+          clearTimeout(hideButtonTimeout.current);
+        }
+        hideButtonTimeout.current = setTimeout(() => {
+          setShowToggleButton(false);
+        }, 3000);
+      }, 1000); // Wait 1 second for keyboard to collapse
+    } else {
+      // Immediately hide bottom button when keyboard is shown
+      setShowBottomButton(false);
+      if (showButtonTimeout.current) {
+        clearTimeout(showButtonTimeout.current);
+      }
+    }
+  }, [showKeyboard]);
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (hideButtonTimeout.current) {
+        clearTimeout(hideButtonTimeout.current);
+      }
+      if (showButtonTimeout.current) {
+        clearTimeout(showButtonTimeout.current);
+      }
+    };
+  }, []);
+
   return (
-    <div className="w-full h-screen bg-black overflow-hidden relative">
-      <ParameterSliders paramDefs={paramDefs} params={params} onParamChange={handleParamChange} />
+    <div className="w-full h-screen bg-black relative">
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
-        <h1 className="text-3xl font-black tracking-tight mb-2" style={{ fontWeight: 900 }}>MUSICOLOUR</h1>
-        <h3 className=" tracking-tight">By Gui Dávid. Inspired by Gordon Pask.</h3>
+        <h1 className="text-3xl font-semibold tracking-tight mb-2">MUSICOLOUR</h1>
+        <h3 className="font-light tracking-tight">
+          By <a href="https://x.com/sinalalgedonico" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">Gui Dávid</a>. Inspired by Gordon Pask.
+        </h3>
+        <div className="text-xs text-gray-300 mt-1">
+          Made for the <span className="italic">San Francisco Cybernetics Symposium</span>
+        </div>
       </div>
       
       {/* Power Bar */}
       <PowerBar excitement={systemState.excitement} />
 
-
+      {/* Debug info */}
+      {showDebug && (
+        <div className="fixed right-4 top-4 bg-black bg-opacity-70 text-white p-4 rounded-lg z-30 text-xs font-mono">
+          <h3 className="font-bold mb-2">Musicality Metrics</h3>
+          <div>Score: {(systemState.musicalityScore || 0).toFixed(3)}</div>
+          {Object.entries(systemState.musicalityMetrics).map(([key, value]) => (
+            <div key={key}>{key}: {(value || 0).toFixed(3)}</div>
+          ))}
+        </div>
+      )}
 
       {/* Fluid Canvas */}
-      <div className="relative h-2/3">
+      <div className="absolute inset-0">
         <FluidCanvas 
           ref={fluidCanvasRef}
           className="w-full h-full"
         />
-        
-
       </div>
 
       {/* Piano Interface */}
-      <div className="absolute bottom-0 left-0 right-0 p-6">
-        <Piano
-          onKeyPress={handleKeyPress}
-          onKeyRelease={handleKeyRelease}
-          pressedKeys={pressedKeys}
-        />
+      <div className={`fixed bottom-0 left-0 right-0 z-20 transition-transform duration-1000 overflow-visible ${showKeyboard ? 'translate-y-0' : 'translate-y-full'}`}>
+        <div className="p-4 overflow-visible">
+          {/* Keyboard Toggle Button */}
+          <div className="flex justify-center mb-2">
+                          <button
+                onClick={() => {
+                  setShowKeyboard(!showKeyboard);
+                }}
+                className="bg-black bg-opacity-50 text-white w-10 h-6 rounded border border-white border-opacity-20 hover:bg-opacity-70 transition-all duration-200 flex items-center justify-center relative group"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M8 12l-4-4h8z"/>
+                </svg>
+                {/* Tooltip - hidden when keyboard is hiding */}
+                {showKeyboard && (
+                  <span className="absolute bottom-full mb-2 px-2 py-1 bg-black bg-opacity-80 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                    Shift + K
+                  </span>
+                )}
+              </button>
+          </div>
+          <Piano
+            onKeyPress={handleKeyPress}
+            onKeyRelease={handleKeyRelease}
+            pressedKeys={pressedKeys}
+          />
+        </div>
       </div>
+
+      {/* Hover area for showing toggle button */}
+      {!showKeyboard && showBottomButton && (
+        <div 
+          className="fixed bottom-0 left-0 right-0 h-32 z-20"
+          onMouseEnter={handleShowButtonHover}
+          onMouseLeave={handleShowButtonLeave}
+        />
+      )}
+
+      {/* Show Piano Button (visible when keyboard is hidden) */}
+      {!showKeyboard && showBottomButton && (
+        <div 
+          className="fixed bottom-4 left-0 right-0 flex justify-center z-30"
+          onMouseEnter={handleShowButtonHover}
+          onMouseLeave={handleShowButtonLeave}
+        >
+          <button
+            onClick={() => setShowKeyboard(true)}
+            className={`bg-black bg-opacity-50 text-white w-10 h-6 rounded border border-white border-opacity-20 hover:bg-opacity-70 flex items-center justify-center relative group transition-all duration-300 ${
+              showToggleButton ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 4l4 4H4z"/>
+            </svg>
+            {/* Tooltip */}
+            <span className="absolute bottom-full mb-2 px-2 py-1 bg-black bg-opacity-80 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+              Shift + K
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

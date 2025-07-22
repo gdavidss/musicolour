@@ -1079,7 +1079,7 @@ function updateKeywords () {
 
 updateKeywords();
 initFramebuffers();
-multipleSplats(parseInt(Math.random() * 20) + 5);
+// multipleSplats(parseInt(Math.random() * 20) + 5); // Disabled auto-splats on init
 
 let lastUpdateTime = Date.now();
 let colorUpdateTimer = 0.0;
