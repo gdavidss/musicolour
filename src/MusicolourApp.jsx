@@ -312,6 +312,13 @@ function MusicolourApp() {
   const hideButtonTimeout = useRef(null);
   const showButtonTimeout = useRef(null);
   
+  // MIDI support
+  const [midiEnabled, setMidiEnabled] = useState(false);
+  const [midiDevices, setMidiDevices] = useState([]);
+  const [showMidiStatus, setShowMidiStatus] = useState(false);
+  const midiAccessRef = useRef(null);
+  const midiStatusTimeout = useRef(null);
+  
   const [systemState, setSystemState] = useState({
     excitement: 0, // 0 to 1 scale
     lastKeyPressTime: null,
@@ -333,7 +340,36 @@ function MusicolourApp() {
   }, [systemState]);
 
   const pianoRef = useRef(null);
-  const keyTimeouts = useRef(new Map());
+
+  // MIDI note number to piano key mapping
+  // Map all MIDI notes to our available piano keys using modulo
+  const getMidiKeyMapping = (noteNumber) => {
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const noteName = noteNames[noteNumber % 12];
+    
+    // Map to our available octaves (4 and 5)
+    // MIDI notes 48-71 map to octave 4, 72+ map to octave 5
+    let octave;
+    if (noteNumber < 72) {
+      octave = 4;
+    } else {
+      octave = 5;
+    }
+    
+    const mappedNote = `${noteName}${octave}`;
+    
+    // Check if this note exists in our piano
+    if (PIANO_KEYS.find(k => k.note === mappedNote)) {
+      return mappedNote;
+    }
+    
+    // If not (like E5+), wrap back to octave 4
+    if (octave === 5 && !PIANO_KEYS.find(k => k.note === mappedNote)) {
+      return `${noteName}4`;
+    }
+    
+    return null;
+  };
 
   // Initialize piano with better sound
   useEffect(() => {
@@ -402,6 +438,8 @@ function MusicolourApp() {
     };
   });
 
+
+
   // New musicality-based update system
   const updateSystemExcitement = useCallback((noteIndex, velocity = 0.5) => {
     const timestamp = Date.now();
@@ -457,18 +495,7 @@ function MusicolourApp() {
     return () => clearInterval(decayInterval);
   }, []);
 
-  // Test fluid simulation on mount
-  useEffect(() => {
-    setTimeout(() => {
-      if (fluidCanvasRef.current) {
-        console.log('Testing fluid simulation...');
-        fluidCanvasRef.current.triggerSplat(0.5);
-      }
-    }, 1000);
-  }, []);
-
-
-  const handleKeyPress = useCallback((key) => {
+  const handleKeyPress = useCallback((key, midiVelocity = null) => {
     if (pressedKeys.has(key.note)) return;
     
     setPressedKeys(prev => new Set([...prev, key.note]));
@@ -478,7 +505,7 @@ function MusicolourApp() {
     }
 
     const noteIndex = PIANO_KEYS.findIndex(k => k.note === key.note);
-    const velocity = 0.5 + Math.random() * 0.5; // Simulate velocity
+    const velocity = midiVelocity || (0.5 + Math.random() * 0.5); // Use MIDI velocity if available, otherwise simulate
     
     // Update system with Pask's adaptive algorithm first
     updateSystemExcitement(noteIndex, velocity);
@@ -512,11 +539,6 @@ function MusicolourApp() {
     } else {
       console.warn('fluidCanvasRef.current is null');
     }
-
-    // Auto-release after timeout if not manually released
-    keyTimeouts.current.set(key.note, setTimeout(() => {
-      handleKeyRelease(key);
-    }, 500));
   }, [pressedKeys, updateSystemExcitement]);
 
   const handleKeyRelease = useCallback((key) => {
@@ -529,15 +551,93 @@ function MusicolourApp() {
     if (pianoRef.current) {
       pianoRef.current.triggerRelease(key.note);
     }
-
-    // Clear timeout
-    if (keyTimeouts.current.has(key.note)) {
-      clearTimeout(keyTimeouts.current.get(key.note));
-      keyTimeouts.current.delete(key.note);
-    }
   }, []);
 
-
+  // Initialize MIDI
+  useEffect(() => {
+    const initMIDI = async () => {
+      try {
+        if (navigator.requestMIDIAccess) {
+          const midiAccess = await navigator.requestMIDIAccess();
+          midiAccessRef.current = midiAccess;
+          
+          // Get connected MIDI devices
+          const devices = [];
+          for (const input of midiAccess.inputs.values()) {
+            devices.push(input.name);
+            
+            // Set up MIDI event listeners
+            input.onmidimessage = (event) => {
+              const [status, noteNumber, velocity] = event.data;
+              const channel = status & 0x0F;
+              const command = status & 0xF0;
+              
+              // Note on
+              if (command === 0x90 && velocity > 0) {
+                const noteName = getMidiKeyMapping(noteNumber);
+                if (noteName) {
+                  const key = PIANO_KEYS.find(k => k.note === noteName);
+                  if (key) {
+                    handleKeyPress(key, velocity / 127); // Normalize velocity to 0-1
+                  }
+                }
+              }
+              // Note off (or note on with velocity 0)
+              else if (command === 0x80 || (command === 0x90 && velocity === 0)) {
+                const noteName = getMidiKeyMapping(noteNumber);
+                if (noteName) {
+                  const key = PIANO_KEYS.find(k => k.note === noteName);
+                  if (key) {
+                    handleKeyRelease(key);
+                  }
+                }
+              }
+            };
+          }
+          
+          setMidiDevices(devices);
+          setMidiEnabled(devices.length > 0);
+          
+          // Show MIDI status if devices found
+          if (devices.length > 0) {
+            setShowMidiStatus(true);
+            
+            // Clear any existing timeout
+            if (midiStatusTimeout.current) {
+              clearTimeout(midiStatusTimeout.current);
+            }
+            
+            // Hide after 5 seconds
+            midiStatusTimeout.current = setTimeout(() => {
+              setShowMidiStatus(false);
+            }, 5000);
+          }
+          
+          // Listen for device changes
+          midiAccess.onstatechange = (event) => {
+            console.log('MIDI device state changed:', event.port.name, event.port.state);
+            // Re-initialize when devices change
+            initMIDI();
+          };
+        } else {
+          console.log('Web MIDI API not supported');
+        }
+      } catch (error) {
+        console.error('Failed to initialize MIDI:', error);
+      }
+    };
+    
+    initMIDI();
+    
+    return () => {
+      // Clean up MIDI listeners
+      if (midiAccessRef.current) {
+        for (const input of midiAccessRef.current.inputs.values()) {
+          input.onmidimessage = null;
+        }
+      }
+    };
+  }, [handleKeyPress, handleKeyRelease]);
 
   const getMoodData = () => {
     const excitement = systemState.excitement;
@@ -603,6 +703,9 @@ function MusicolourApp() {
       if (showButtonTimeout.current) {
         clearTimeout(showButtonTimeout.current);
       }
+      if (midiStatusTimeout.current) {
+        clearTimeout(midiStatusTimeout.current);
+      }
     };
   }, []);
 
@@ -622,9 +725,26 @@ function MusicolourApp() {
       {/* Power Bar */}
       <PowerBar excitement={systemState.excitement} />
 
+      {/* MIDI Status */}
+      {midiEnabled && (
+        <div className={`fixed right-4 top-4 bg-black bg-opacity-70 text-white p-2 rounded-lg z-30 text-xs font-mono transition-opacity duration-1000 ${
+          showMidiStatus ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}>
+          <div className="flex items-center">
+            <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
+            <span>MIDI Connected</span>
+          </div>
+          {midiDevices.length > 0 && (
+            <div className="text-gray-400 mt-1">
+              {midiDevices.join(', ')}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Debug info */}
       {showDebug && (
-        <div className="fixed right-4 top-4 bg-black bg-opacity-70 text-white p-4 rounded-lg z-30 text-xs font-mono">
+        <div className={`fixed right-4 ${showMidiStatus ? 'top-24' : 'top-4'} bg-black bg-opacity-70 text-white p-4 rounded-lg z-30 text-xs font-mono transition-all duration-300`}>
           <h3 className="font-bold mb-2">Musicality Metrics</h3>
           <div>Score: {(systemState.musicalityScore || 0).toFixed(3)}</div>
           {Object.entries(systemState.musicalityMetrics).map(([key, value]) => (
