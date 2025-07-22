@@ -3,6 +3,7 @@ import * as Tone from 'tone';
 import FluidCanvas from './FluidCanvas';
 import { createFluidSimulation } from './webgl-fluid-wrapper';
 import MusicalityEngine, { MODEL_PARAMS } from './musicalityEngine';
+import { useAutoplayer, AutoplayerPanel } from './Autoplayer.jsx';
 
 // Initialize Tone.js
 Tone.start();
@@ -308,6 +309,9 @@ function MusicolourApp() {
   const [showDebug, setShowDebug] = useState(false);
   const [showParams, setShowParams] = useState(false);
   const [showKeyboard, setShowKeyboard] = useState(true);
+
+  // Autoplayer visibility
+  const [showAutoplayer, setShowAutoplayer] = useState(false);
   const [showToggleButton, setShowToggleButton] = useState(false);
   const [showBottomButton, setShowBottomButton] = useState(false);
   const hideButtonTimeout = useRef(null);
@@ -431,6 +435,12 @@ function MusicolourApp() {
       // Toggle parameters panel with Shift + L
       if (event.code === 'KeyL' && event.shiftKey) {
         setShowParams(prev => !prev);
+        return;
+      }
+
+      // Toggle autoplayer panel with Shift + ;
+      if (event.code === 'Semicolon' && event.shiftKey) {
+        setShowAutoplayer(prev => !prev);
         return;
       }
       
@@ -705,6 +715,22 @@ function MusicolourApp() {
     };
   }, []); // Run only once on mount
 
+  // ---------------- AUTOPLAYER HOOK ----------------
+  // Reuse existing handler refs declared later in the file
+
+  const { autoPlaying, playSong, stopSong } = useAutoplayer(
+    handleKeyPressRef,
+    handleKeyReleaseRef,
+    PIANO_KEYS
+  );
+
+  // Clean up any scheduled timeouts on unmount
+  useEffect(() => {
+    return () => {
+      stopSong();
+    };
+  }, [stopSong]);
+
   const getMoodData = () => {
     const excitement = systemState.excitement;
     
@@ -913,6 +939,14 @@ function MusicolourApp() {
           })}
         </div>
       )}
+
+      {/* Autoplayer Panel */}
+      <AutoplayerPanel
+        visible={showAutoplayer}
+        autoPlaying={autoPlaying}
+        playSong={playSong}
+        stopSong={stopSong}
+      />
 
       {/* Fluid Canvas */}
       <div className="absolute inset-0" style={{ overflow: 'hidden' }}>
