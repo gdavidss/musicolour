@@ -553,6 +553,19 @@ function MusicolourApp() {
     }
   }, []);
 
+  // Hold latest handler references so MIDI listeners remain valid
+  const handleKeyPressRef = useRef(handleKeyPress);
+  const handleKeyReleaseRef = useRef(handleKeyRelease);
+
+  // Update refs whenever the callbacks change
+  useEffect(() => {
+    handleKeyPressRef.current = handleKeyPress;
+  }, [handleKeyPress]);
+
+  useEffect(() => {
+    handleKeyReleaseRef.current = handleKeyRelease;
+  }, [handleKeyRelease]);
+
   // Initialize MIDI
   useEffect(() => {
     const initMIDI = async () => {
@@ -577,8 +590,8 @@ function MusicolourApp() {
                 const noteName = getMidiKeyMapping(noteNumber);
                 if (noteName) {
                   const key = PIANO_KEYS.find(k => k.note === noteName);
-                  if (key) {
-                    handleKeyPress(key, velocity / 127); // Normalize velocity to 0-1
+                  if (key && handleKeyPressRef.current) {
+                    handleKeyPressRef.current(key, velocity / 127); // Normalize velocity to 0-1 using latest handler
                   }
                 }
               }
@@ -587,8 +600,8 @@ function MusicolourApp() {
                 const noteName = getMidiKeyMapping(noteNumber);
                 if (noteName) {
                   const key = PIANO_KEYS.find(k => k.note === noteName);
-                  if (key) {
-                    handleKeyRelease(key);
+                  if (key && handleKeyReleaseRef.current) {
+                    handleKeyReleaseRef.current(key);
                   }
                 }
               }
@@ -616,8 +629,43 @@ function MusicolourApp() {
           // Listen for device changes
           midiAccess.onstatechange = (event) => {
             console.log('MIDI device state changed:', event.port.name, event.port.state);
-            // Re-initialize when devices change
-            initMIDI();
+
+            // If a new input is connected, attach the listener
+            if (event.port.type === 'input' && event.port.state === 'connected') {
+              const input = event.port;
+              if (input) {
+                input.onmidimessage = (event) => {
+                  const [status, noteNumber, velocity] = event.data;
+                  const command = status & 0xF0;
+
+                  // Note on
+                  if (command === 0x90 && velocity > 0) {
+                    const noteName = getMidiKeyMapping(noteNumber);
+                    if (noteName) {
+                      const key = PIANO_KEYS.find(k => k.note === noteName);
+                      if (key && handleKeyPressRef.current) {
+                        handleKeyPressRef.current(key, velocity / 127);
+                      }
+                    }
+                  }
+                  // Note off
+                  else if (command === 0x80 || (command === 0x90 && velocity === 0)) {
+                    const noteName = getMidiKeyMapping(noteNumber);
+                    if (noteName) {
+                      const key = PIANO_KEYS.find(k => k.note === noteName);
+                      if (key && handleKeyReleaseRef.current) {
+                        handleKeyReleaseRef.current(key);
+                      }
+                    }
+                  }
+                };
+              }
+            }
+
+            // Update device list & status
+            const devices = Array.from(midiAccess.inputs.values()).map(input => input.name);
+            setMidiDevices(devices);
+            setMidiEnabled(devices.length > 0);
           };
         } else {
           console.log('Web MIDI API not supported');
@@ -637,7 +685,7 @@ function MusicolourApp() {
         }
       }
     };
-  }, [handleKeyPress, handleKeyRelease]);
+  }, []); // Run only once on mount
 
   const getMoodData = () => {
     const excitement = systemState.excitement;
