@@ -2,7 +2,7 @@ import React from 'react';
 
 function ParameterSliders({ paramDefs, params, onParamChange }) {
   return (
-    <div className="fixed right-4 top-4 bg-black bg-opacity-70 text-white p-4 rounded-lg z-30 max-h-screen overflow-y-auto w-64">
+    <div className="bg-gray-800 bg-opacity-70 text-white p-4 rounded-lg w-full">
       <h2 className="text-sm font-bold mb-2 tracking-wide">PARAMETERS</h2>
       {Object.entries(paramDefs).map(([key, def]) => (
         <div key={key} className="mb-3">

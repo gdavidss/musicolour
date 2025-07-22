@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
 import FluidCanvas from './FluidCanvas';
 import { createFluidSimulation } from './webgl-fluid-wrapper';
-import ParameterSliders from './ParameterSliders';
+import SettingsPanel from './SettingsPanel';
 import MidiInputSelector from './MidiInputSelector';
 
 // Initialize Tone.js - REMOVED from here, will be started by user gesture.
@@ -445,6 +445,7 @@ function MusicolourApp() {
   const fluidCanvasRef = useRef(null);
   const [selectedMidiInput, setSelectedMidiInput] = useState(null);
   const [isAudioStarted, setIsAudioStarted] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   // ---------------- TUNABLE PARAMETERS ----------------
   const paramDefs = {
@@ -1034,14 +1035,30 @@ function MusicolourApp() {
 
   return (
     <div className="w-full h-screen bg-black overflow-hidden relative">
-      <ParameterSliders paramDefs={paramDefs} params={params} onParamChange={handleParamChange} />
+      <SettingsPanel
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        paramDefs={paramDefs}
+        params={params}
+        onParamChange={handleParamChange}
+        onDeviceSelected={setSelectedMidiInput}
+      />
+      
+      {/* Settings Button */}
+      {!isSettingsOpen && (
+        <button 
+          onClick={() => setIsSettingsOpen(true)}
+          className="fixed top-6 right-6 z-40 p-3 bg-gray-800 bg-opacity-70 rounded-full text-white hover:bg-gray-700 transition-colors shadow-lg"
+          aria-label="Open settings"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        </button>
+      )}
+
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-black tracking-tight mb-2" style={{ fontWeight: 900 }}>MUSICOLOUR</h1>
         <h3 className=" tracking-tight">By Gui Dávid. Inspired by Gordon Pask.</h3>
-        <div className="absolute top-20 left-0">
-          <MidiInputSelector onDeviceSelected={setSelectedMidiInput} />
-        </div>
       </div>
       
       {/* Power Bar */}
