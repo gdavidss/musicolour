@@ -1,6 +1,7 @@
-// Musicality Engine - Advanced musical pattern detection and scoring
-// Based on music theory and cognitive musicology principles
+// Musicality Engine – Advanced musical pattern detection and scoring (rev.2)
+// Implements the metric recipe outlined in the design documents.
 
+// ---------- CONSTANTS & HELPERS ----------
 // Musical intervals in semitones
 const INTERVALS = {
   UNISON: 0,
@@ -18,7 +19,7 @@ const INTERVALS = {
   OCTAVE: 12
 };
 
-// Common scales (as interval patterns from root)
+// Common scales (interval patterns from root)
 const SCALES = {
   MAJOR: [0, 2, 4, 5, 7, 9, 11],
   NATURAL_MINOR: [0, 2, 3, 5, 7, 8, 10],
@@ -29,7 +30,7 @@ const SCALES = {
   CHROMATIC: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 };
 
-// Chord patterns (as intervals from root)
+// Chord patterns (intervals from root)
 const CHORDS = {
   MAJOR_TRIAD: [0, 4, 7],
   MINOR_TRIAD: [0, 3, 7],
@@ -40,24 +41,50 @@ const CHORDS = {
   MINOR_SEVENTH: [0, 3, 7, 10]
 };
 
-// Common chord progressions (as scale degrees)
+// Canonical chord progressions (roots relative to scale)
 const PROGRESSIONS = {
-  I_V_vi_IV: [0, 7, 9, 5], // Pop progression
-  I_IV_V: [0, 5, 7], // Basic blues
-  ii_V_I: [2, 7, 0], // Jazz cadence
-  I_vi_IV_V: [0, 9, 5, 7], // 50s progression
-  vi_IV_I_V: [9, 5, 0, 7], // Alternative pop
+  I_V_vi_IV: [0, 7, 9, 5],
+  I_IV_V: [0, 5, 7],
+  ii_V_I: [2, 7, 0],
+  I_vi_IV_V: [0, 9, 5, 7],
+  vi_IV_I_V: [9, 5, 0, 7]
 };
 
+// Sliding-window sizes & tuning knobs (exported for live tweaking)
+export const MODEL_PARAMS = {
+  HISTORY: 32,          // notes kept
+  IOI_WIN: 16,          // inter-onset intervals analysed
+  VEL_WIN: 16,          // velocities analysed
+  CHORD_WINDOW: 250,    // ms to collect simultaneous notes
+  EMA_ALPHA: 0.1        // speed of “boredom baseline”
+  ,BOOST_POS: 0.05      // excitement gain when surprising/creative
+  ,BOOST_NEG: 0.02      // boredom decay when stagnant
+};
+
+// Helper functions
+const clamp = (x, min, max) => Math.max(min, Math.min(max, x));
+const norm = (x, lo, hi) => clamp((x - lo) / (hi - lo), 0, 1); // 0‒1
+
+// ---------- MUSICALITY ENGINE ----------
 class MusicalityEngine {
   constructor() {
+    this.reset();
+  }
+
+  reset() {
     this.noteHistory = [];
     this.timeHistory = [];
-    this.chordBuffer = [];
-    this.scaleContext = null;
     this.rhythmPattern = [];
-    this.lastBeat = null;
+    this.velHistory = [];
+
+    this.chordBuffer = [];
+    this.chordBufferTime = 0;
+    this.chordHistory = [];
+
+    this.scaleContext = null;
     this.tempo = null;
+    this.ema = null; // exponential moving average of score
+
     this.musicalityScore = 0;
     this.metrics = {
       melodicCoherence: 0,
@@ -69,31 +96,17 @@ class MusicalityEngine {
     };
   }
 
-  reset() {
-    this.noteHistory = [];
-    this.timeHistory = [];
-    this.chordBuffer = [];
-    this.scaleContext = null;
-    this.rhythmPattern = [];
-    this.lastBeat = null;
-    this.tempo = null;
-    this.musicalityScore = 0;
-    Object.keys(this.metrics).forEach(key => this.metrics[key] = 0);
-  }
-
-  // Main entry point - process a new note
+  // Main entry – call on each MIDI note-on
   processNote(noteIndex, timestamp, velocity = 0.5) {
-    // Add to history
+    // ---- Update core histories ----
     this.noteHistory.push(noteIndex);
     this.timeHistory.push(timestamp);
-    
-    // Keep history manageable
-    if (this.noteHistory.length > 32) {
+    if (this.noteHistory.length > MODEL_PARAMS.HISTORY) {
       this.noteHistory.shift();
       this.timeHistory.shift();
     }
 
-    // Update all metrics
+    // ---- Per-metric updates ----
     this.updateRhythmicConsistency(timestamp);
     this.updateMelodicCoherence();
     this.updateScaleAdherence();
@@ -101,7 +114,7 @@ class MusicalityEngine {
     this.updatePhraseStructure();
     this.updateDynamicVariation(velocity);
 
-    // Calculate overall musicality score
+    // ---- Aggregate score & excitement ----
     this.calculateMusicalityScore();
 
     return {
@@ -111,476 +124,152 @@ class MusicalityEngine {
     };
   }
 
-  // Rhythmic consistency - rewards steady tempo and rhythmic patterns
-  updateRhythmicConsistency(timestamp) {
+  // ---------- METRIC COMPUTATIONS ----------
+  // 1. Rhythmic Consistency & tempo
+  updateRhythmicConsistency(ts) {
     if (this.timeHistory.length < 2) return;
 
-    const intervals = [];
-    for (let i = 1; i < this.timeHistory.length; i++) {
-      intervals.push(this.timeHistory[i] - this.timeHistory[i-1]);
-    }
+    const ioi = ts - this.timeHistory[this.timeHistory.length - 2];
+    this.rhythmPattern.push(ioi);
+    if (this.rhythmPattern.length > MODEL_PARAMS.IOI_WIN) this.rhythmPattern.shift();
 
-    // Detect tempo
-    const recentIntervals = intervals.slice(-8);
-    const avgInterval = recentIntervals.reduce((a, b) => a + b, 0) / recentIntervals.length;
-    
-    // Calculate tempo consistency
-    const variance = recentIntervals.reduce((sum, interval) => {
-      return sum + Math.pow(interval - avgInterval, 2);
-    }, 0) / recentIntervals.length;
-    const stdDev = Math.sqrt(variance);
-    let consistency = 1 - Math.min(1, stdDev / avgInterval);
+    const mean = this.rhythmPattern.reduce((a, b) => a + b, 0) / this.rhythmPattern.length;
+    const variance = this.rhythmPattern.reduce((s, v) => s + (v - mean) ** 2, 0) / this.rhythmPattern.length;
+    const cv = Math.sqrt(variance) / mean; // coefficient of variation
 
-    // Detect rhythmic patterns (e.g., syncopation, triplets)
-    const rhythmScore = this.detectRhythmPatterns(intervals);
-
-    // Musical tempo range with penalties for too fast/slow
-    let tempoScore = 0;
-    const bpm = 60000 / avgInterval; // Convert to BPM
-    
-    if (bpm >= 60 && bpm <= 180) {
-      tempoScore = 1.0; // Perfect tempo range
-    } else if (bpm >= 40 && bpm <= 240) {
-      tempoScore = 0.7; // Acceptable range
-    } else if (bpm > 240 && bpm <= 300) {
-      tempoScore = 0.3; // Too fast
-    } else if (bpm > 300) {
-      tempoScore = 0; // Way too fast (key mashing)
-    } else if (bpm < 40 && bpm >= 20) {
-      tempoScore = 0.3; // Too slow
-    } else {
-      tempoScore = 0; // Way too slow
-    }
-    
-    // Extra penalty for extremely fast playing (potential button mashing)
-    if (avgInterval < 150) { // Less than 400 BPM
-      tempoScore = 0;
-      consistency *= 0.3; // Also reduce consistency score
-    }
-
-    this.metrics.rhythmicConsistency = consistency * 0.5 + rhythmScore * 0.3 + tempoScore * 0.2;
+    this.metrics.rhythmicConsistency = 1 - norm(cv, 0.05, 0.35);
+    this.tempo = 60000 / mean; // BPM
   }
 
-  detectRhythmPatterns(intervals) {
-    if (intervals.length < 4) return 0;
-
-    // Check for common rhythmic patterns
-    let patternScore = 0;
-
-    // Steady beat
-    const steadyBeat = intervals.every(i => Math.abs(i - intervals[0]) < intervals[0] * 0.1);
-    if (steadyBeat) patternScore += 0.5;
-
-    // Syncopation (alternating long-short)
-    const syncopated = intervals.slice(-4).every((interval, i) => 
-      i % 2 === 0 ? interval > intervals[0] * 1.3 : interval < intervals[0] * 0.7
-    );
-    if (syncopated) patternScore += 0.7;
-
-    // Triplet feel (3 notes in the time of 2)
-    if (intervals.length >= 3) {
-      const tripletRatio = intervals[intervals.length-1] / intervals[intervals.length-3];
-      if (Math.abs(tripletRatio - 0.667) < 0.1) patternScore += 0.6;
-    }
-
-    return Math.min(1, patternScore);
-  }
-
-  // Melodic coherence - rewards stepwise motion and melodic phrases
+  // 2. Melodic Coherence
   updateMelodicCoherence() {
-    if (this.noteHistory.length < 3) return;
+    if (this.noteHistory.length < 2) return;
 
-    const recentNotes = this.noteHistory.slice(-8);
-    const intervals = [];
-    
-    for (let i = 1; i < recentNotes.length; i++) {
-      intervals.push(recentNotes[i] - recentNotes[i-1]);
-    }
+    const recent = this.noteHistory.slice(-8);
+    const intervals = recent.slice(1).map((n, i) => Math.abs(n - recent[i]));
+    if (intervals.length === 0) return;
 
-    // Analyze interval distribution
-    let stepwiseMotion = 0;
-    let leapMotion = 0;
-    let repeatedNotes = 0;
+    const smallSteps = intervals.filter(x => x <= INTERVALS.MAJOR_SECOND).length;
+    const bigLeaps = intervals.filter(x => x >= INTERVALS.MINOR_SIXTH).length;
+    const repetition = new Set(intervals).size / intervals.length; // <1 ⇒ motif
 
-    intervals.forEach(interval => {
-      const absInterval = Math.abs(interval);
-      if (absInterval === 0) repeatedNotes++;
-      else if (absInterval <= 2) stepwiseMotion++;
-      else if (absInterval >= 5) leapMotion++;
-    });
+    const stepScore = smallSteps / intervals.length;
+    const leapPenalty = bigLeaps ? norm(bigLeaps, 0, 4) : 0;
+    const motifScore = 1 - repetition;
 
-    // Good melodies have mostly stepwise motion with occasional leaps
-    const totalIntervals = intervals.length;
-    const stepwiseRatio = stepwiseMotion / totalIntervals;
-    const leapRatio = leapMotion / totalIntervals;
-    const repetitionRatio = repeatedNotes / totalIntervals;
-
-    // Ideal ratios based on music theory
-    let coherenceScore = 0;
-    coherenceScore += Math.min(1, stepwiseRatio * 1.5); // Reward stepwise motion
-    coherenceScore += Math.min(0.3, leapRatio * 2); // Some leaps are good
-    coherenceScore -= repetitionRatio * 0.5; // Penalize too much repetition
-
-    // Check for melodic contour (arch, ascending, descending)
-    const contourScore = this.analyzeMelodicContour(recentNotes);
-
-    this.metrics.melodicCoherence = Math.max(0, Math.min(1, 
-      coherenceScore * 0.6 + contourScore * 0.4
-    ));
+    this.metrics.melodicCoherence = clamp(0.6 * stepScore + 0.3 * motifScore - 0.3 * leapPenalty, 0, 1);
   }
 
-  analyzeMelodicContour(notes) {
-    if (notes.length < 4) return 0;
-
-    // Calculate overall direction
-    const firstNote = notes[0];
-    const lastNote = notes[notes.length - 1];
-    const middleIndex = Math.floor(notes.length / 2);
-    const middleNote = notes[middleIndex];
-
-    // Arch contour (up then down) - very musical
-    const isArch = middleNote > firstNote && middleNote > lastNote;
-    if (isArch) return 1;
-
-    // Inverted arch (down then up)
-    const isInvertedArch = middleNote < firstNote && middleNote < lastNote;
-    if (isInvertedArch) return 0.9;
-
-    // Ascending or descending lines
-    const isAscending = notes.every((note, i) => i === 0 || note >= notes[i-1]);
-    const isDescending = notes.every((note, i) => i === 0 || note <= notes[i-1]);
-    if (isAscending || isDescending) return 0.7;
-
-    // Wave pattern
-    let direction = 0;
-    let directionChanges = 0;
-    for (let i = 1; i < notes.length; i++) {
-      const newDirection = Math.sign(notes[i] - notes[i-1]);
-      if (newDirection !== 0 && newDirection !== direction) {
-        directionChanges++;
-        direction = newDirection;
-      }
-    }
-    if (directionChanges >= 2 && directionChanges <= 4) return 0.6;
-
-    return 0.3;
-  }
-
-  // Scale adherence - detect and reward playing within a scale
+  // 3. Scale Adherence
   updateScaleAdherence() {
-    if (this.noteHistory.length < 5) return;
+    if (this.noteHistory.length === 0) return;
 
-    const recentNotes = this.noteHistory.slice(-12);
-    const noteSet = new Set(recentNotes.map(n => n % 12)); // Reduce to pitch classes
+    const pcsCounts = Array(12).fill(0);
+    this.noteHistory.slice(-MODEL_PARAMS.HISTORY).forEach(n => pcsCounts[n % 12]++);
 
-    // Try to detect which scale is being used
-    let bestScale = null;
-    let bestScore = 0;
+    let best = { name: null, fit: 0 };
+    for (const [name, pattern] of Object.entries(SCALES)) {
+      const fit = pattern.reduce((s, int) => s + pcsCounts[int], 0);
+      if (fit > best.fit) best = { name, fit };
+    }
 
-    Object.entries(SCALES).forEach(([scaleName, scaleIntervals]) => {
-      // Try each possible root note
-      for (let root = 0; root < 12; root++) {
-        const scaleNotes = new Set(scaleIntervals.map(i => (root + i) % 12));
-        
-        // Calculate how many of our notes fit this scale
-        let matches = 0;
-        noteSet.forEach(note => {
-          if (scaleNotes.has(note)) matches++;
-        });
-
-        const score = matches / noteSet.size;
-        if (score > bestScore) {
-          bestScore = score;
-          bestScale = { name: scaleName, root, score };
-        }
-      }
-    });
-
-    this.scaleContext = bestScale;
-    this.metrics.scaleAdherence = bestScore;
+    this.scaleContext = best.name;
+    this.metrics.scaleAdherence = best.fit / this.noteHistory.length;
   }
 
-  // Harmonic progression - detect chord patterns
+  // 4. Harmonic Progression
+  detectChord(pitchClasses) {
+    for (const [name, intervals] of Object.entries(CHORDS)) {
+      for (const root of pitchClasses) {
+        if (intervals.every(i => pitchClasses.has((root + i) % 12))) {
+          return { name, root };
+        }
+      }
+    }
+    return null;
+  }
+
   updateHarmonicProgression() {
-    if (this.noteHistory.length < 3) return;
+    const now = this.timeHistory.at(-1);
+    const lastNote = this.noteHistory.at(-1);
 
-    // Collect recent notes that might form chords
-    const recentNotes = this.noteHistory.slice(-6);
-    const chordScore = this.detectChordProgression(recentNotes);
-
-    this.metrics.harmonicProgression = chordScore;
-  }
-
-  detectChordProgression(notes) {
-    // Simple chord detection - looks for triadic patterns
-    const noteSet = new Set(notes.map(n => n % 12));
-    
-    // If too few unique notes, not a chord
-    if (noteSet.size < 2) return 0;
-    
-    let chordScore = 0;
-
-    // Check if notes form known chord patterns
-    Object.entries(CHORDS).forEach(([chordName, intervals]) => {
-      for (let root = 0; root < 12; root++) {
-        const chordNotes = new Set(intervals.map(i => (root + i) % 12));
-        
-        let matches = 0;
-        noteSet.forEach(note => {
-          if (chordNotes.has(note)) matches++;
-        });
-
-        if (matches >= 2) { // At least 2 notes of a triad
-          chordScore = Math.max(chordScore, matches / chordNotes.size);
-        }
+    // Start/reset buffer window
+    if (now - this.chordBufferTime > MODEL_PARAMS.CHORD_WINDOW) {
+      // Flush & detect chord
+      if (this.chordBuffer.length) {
+        const pcs = new Set(this.chordBuffer.map(n => n % 12));
+        const chord = this.detectChord(pcs);
+        this.chordHistory.push(chord);
       }
-    });
-
-    return chordScore;
-  }
-
-  // Phrase structure - detect musical phrases (4-bar, 8-bar patterns)
-  updatePhraseStructure() {
-    if (this.noteHistory.length < 8) return;
-
-    // Look for phrase endings (longer intervals, return to tonic)
-    const intervals = [];
-    for (let i = 1; i < this.timeHistory.length; i++) {
-      intervals.push(this.timeHistory[i] - this.timeHistory[i-1]);
+      this.chordBuffer = [lastNote];
+      this.chordBufferTime = now;
+    } else {
+      this.chordBuffer.push(lastNote);
     }
 
-    // Detect phrase boundaries (pauses)
-    const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    let phraseScore = 0;
-
-    // Look for regular phrase lengths (4 or 8 notes)
-    const phraseLength = this.noteHistory.length;
-    if (phraseLength % 4 === 0 || phraseLength % 8 === 0) {
-      phraseScore += 0.5;
-    }
-
-    // Check for return to tonic
-    if (this.scaleContext && this.noteHistory.length >= 8) {
-      const lastNote = this.noteHistory[this.noteHistory.length - 1] % 12;
-      if (lastNote === this.scaleContext.root) {
-        phraseScore += 0.5;
-      }
-    }
-
-    this.metrics.phraseStructure = Math.min(1, phraseScore);
-  }
-
-  // Dynamic variation - rewards expressive playing
-  updateDynamicVariation(velocity) {
-    // This would track velocity changes over time
-    // For now, simple implementation
-    this.metrics.dynamicVariation = 0.5 + (velocity - 0.5) * 0.5;
-  }
-
-  // Calculate overall musicality score
-  calculateMusicalityScore() {
-    const weights = {
-      melodicCoherence: 0.25,
-      harmonicProgression: 0.15,
-      rhythmicConsistency: 0.25,
-      scaleAdherence: 0.2,
-      phraseStructure: 0.1,
-      dynamicVariation: 0.05
-    };
-
-    this.musicalityScore = Object.entries(this.metrics).reduce((total, [metric, value]) => {
-      return total + value * (weights[metric] || 0);
-    }, 0);
-    
-    // Apply penalties for non-musical playing
-    const penalties = this.calculatePenalties();
-    this.musicalityScore *= penalties.multiplier;
-    
-    // If playing is too random or too fast, cap the score
-    if (penalties.isRandom || penalties.isMashing) {
-      this.musicalityScore = Math.min(this.musicalityScore, 0.2);
-    }
-  }
-
-  // Convert musicality score to excitement boost
-  calculateExcitementBoost() {
-    // High musicality should allow reaching 100% in ~90 seconds
-    // We need to accumulate 1.0 excitement over 90 seconds
-    // At 160 BPM (375ms per note), that's 240 notes in 90 seconds
-    // With decay of 0.002 per second, we lose 0.18 over 90 seconds
-    // So we need to gain 1.18 total, which is 1.18 / 240 = 0.00492 per note
-    
-    const baseRatePerNote = 0.00492;
-    
-    // With perfect musicality (1.0), we want exactly the base rate
-    // With poor musicality (0.0), we want no excitement
-    // With good musicality (0.8+), we want to reach 100% in ~90 seconds
-    
-    let boost = this.musicalityScore;
-    
-    // Extra boost for very high musicality to ensure we reach 100%
-    if (this.musicalityScore > 0.85) {
-      boost = 1.15; // 15% bonus to ensure we reach 100%
-    } else if (this.musicalityScore < 0.3) {
-      boost = 0; // No excitement for poor playing
-    }
-    
-    return baseRatePerNote * boost;
-  }
-
-  // Check if a simple pattern like "do re mi fa" is being played
-  isPlayingSimpleScale() {
-    if (this.noteHistory.length < 4) return false;
-
-    const recent = this.noteHistory.slice(-4);
-    
-    // Check for ascending scale pattern
-    let isAscending = true;
-    for (let i = 1; i < recent.length; i++) {
-      const interval = recent[i] - recent[i-1];
-      if (interval < 1 || interval > 2) {
-        isAscending = false;
+    // Compare recent chord root sequence against known progressions
+    const roots = this.chordHistory.slice(-4).map(c => (c ? c.root : null));
+    let match = 0;
+    for (const prog of Object.values(PROGRESSIONS)) {
+      const seg = prog.slice(0, roots.length);
+      if (JSON.stringify(seg) === JSON.stringify(roots)) {
+        match = roots.length / prog.length;
         break;
       }
     }
-
-    return isAscending && this.metrics.rhythmicConsistency > 0.7;
+    this.metrics.harmonicProgression = match; // 0‒1
   }
 
-  // Detect random playing patterns
-  detectRandomPlaying() {
-    if (this.noteHistory.length < 5) return false;
-    
-    // Check for large random jumps
-    const intervals = [];
-    for (let i = 1; i < this.noteHistory.length; i++) {
-      intervals.push(Math.abs(this.noteHistory[i] - this.noteHistory[i-1]));
-    }
-    
-    const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    const largeJumps = intervals.filter(i => i > 8).length;
-    const veryLargeJumps = intervals.filter(i => i > 12).length;
-    
-    // Check timing consistency
-    const timeIntervals = [];
-    for (let i = 1; i < this.timeHistory.length; i++) {
-      timeIntervals.push(this.timeHistory[i] - this.timeHistory[i-1]);
-    }
-    
-    const timeVariance = this.calculateVariance(timeIntervals);
-    const avgTimeInterval = timeIntervals.reduce((a, b) => a + b, 0) / timeIntervals.length;
-    const timeInconsistency = timeVariance / (avgTimeInterval * avgTimeInterval);
-    
-    // Check for lack of melodic patterns
-    const hasRepeatingPatterns = this.detectRepeatingPatterns();
-    const hasScalePatterns = this.detectScalePatterns();
-    
-    // More sophisticated random detection
-    let randomScore = 0;
-    
-    // Factors that indicate random playing
-    if (largeJumps > intervals.length * 0.25) randomScore += 0.3;
-    if (veryLargeJumps > 0) randomScore += 0.2;
-    if (avgInterval > 5) randomScore += 0.2;
-    if (timeInconsistency > 0.15) randomScore += 0.2;
-    if (!hasRepeatingPatterns) randomScore += 0.2;
-    if (!hasScalePatterns) randomScore += 0.2;
-    if (this.metrics.melodicCoherence < 0.5) randomScore += 0.2;
-    
-    // Factors that indicate musical playing (reduce random score)
-    if (this.metrics.rhythmicConsistency > 0.8) randomScore -= 0.2;
-    if (hasScalePatterns) randomScore -= 0.3;
-    
-    return randomScore > 0.5;
+  // 5. Phrase Structure (very simple IOI-based heuristic)
+  updatePhraseStructure() {
+    if (!this.tempo || this.rhythmPattern.length < 4) return;
+
+    const meanIOI = this.rhythmPattern.reduce((a, b) => a + b, 0) / this.rhythmPattern.length;
+    const rests = this.rhythmPattern.slice(-8).filter(x => x > 1.5 * meanIOI);
+    const phraseLen = rests.length ? rests[rests.length - 1] : 0;
+
+    const ideal = 4 * (60000 / this.tempo); // 4 beats in current tempo
+    this.metrics.phraseStructure = 1 - norm(Math.abs(phraseLen - ideal), 0, ideal);
   }
-  
-  // Detect if there are repeating patterns in the note sequence
-  detectRepeatingPatterns() {
-    if (this.noteHistory.length < 8) return false;
-    
-    // Look for 2-4 note patterns that repeat
-    for (let patternLength = 2; patternLength <= 4; patternLength++) {
-      for (let i = 0; i <= this.noteHistory.length - patternLength * 2; i++) {
-        const pattern = this.noteHistory.slice(i, i + patternLength);
-        const nextPattern = this.noteHistory.slice(i + patternLength, i + patternLength * 2);
-        
-        if (JSON.stringify(pattern) === JSON.stringify(nextPattern)) {
-          return true;
-        }
-      }
-    }
-    
-    return false;
+
+  // 6. Dynamic Variation (velocity coefficient of variation)
+  updateDynamicVariation(vel) {
+    this.velHistory.push(vel);
+    if (this.velHistory.length > MODEL_PARAMS.VEL_WIN) this.velHistory.shift();
+
+    const mean = this.velHistory.reduce((a, b) => a + b, 0) / this.velHistory.length;
+    const variance = this.velHistory.reduce((s, v) => s + (v - mean) ** 2, 0) / this.velHistory.length;
+    const cv = Math.sqrt(variance) / mean;
+
+    this.metrics.dynamicVariation = 1 - norm(Math.abs(cv - 0.25), 0.2, 0.35);
   }
-  
-  // Detect scale-like patterns
-  detectScalePatterns() {
-    if (this.noteHistory.length < 4) return false;
-    
-    // Check recent notes for scale-like movement
-    const recent = this.noteHistory.slice(-8);
-    let ascendingSteps = 0;
-    let descendingSteps = 0;
-    let stepwiseMotion = 0;
-    
-    for (let i = 1; i < recent.length; i++) {
-      const interval = recent[i] - recent[i-1];
-      
-      if (interval >= 1 && interval <= 2) {
-        ascendingSteps++;
-        stepwiseMotion++;
-      } else if (interval >= -2 && interval <= -1) {
-        descendingSteps++;
-        stepwiseMotion++;
-      }
-    }
-    
-    // Scale-like if mostly stepwise motion
-    return stepwiseMotion >= (recent.length - 1) * 0.6;
-  }
-  
-  // Calculate penalties for non-musical playing
-  calculatePenalties() {
-    const penalties = {
-      multiplier: 1.0,
-      isRandom: false,
-      isMashing: false
+
+  // ---------- SCORING & EXCITEMENT ----------
+  calculateMusicalityScore() {
+    const weights = {
+      melodicCoherence: 0.25,
+      harmonicProgression: 0.25,
+      rhythmicConsistency: 0.20,
+      scaleAdherence: 0.15,
+      phraseStructure: 0.10,
+      dynamicVariation: 0.05
     };
-    
-    // Check for random playing
-    if (this.detectRandomPlaying()) {
-      penalties.isRandom = true;
-      penalties.multiplier *= 0.3;
-    }
-    
-    // Check for key mashing (very fast, inconsistent playing)
-    if (this.timeHistory.length >= 3) {
-      const recentTimes = this.timeHistory.slice(-5);
-      const intervals = [];
-      for (let i = 1; i < recentTimes.length; i++) {
-        intervals.push(recentTimes[i] - recentTimes[i-1]);
-      }
-      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      
-      if (avgInterval < 100) { // Less than 100ms between notes
-        penalties.isMashing = true;
-        penalties.multiplier *= 0.1;
-      }
-    }
-    
-    // Check for lack of any musical qualities
-    const totalMetricScore = Object.values(this.metrics).reduce((a, b) => a + b, 0);
-    if (totalMetricScore < 1.5) { // Very low overall scores
-      penalties.multiplier *= 0.5;
-    }
-    
-    return penalties;
+
+    const raw = Object.entries(weights).reduce((s, [k, w]) => s + w * this.metrics[k], 0);
+    this.musicalityScore = Math.round(raw * 100); // 0-100
   }
-  
-  calculateVariance(values) {
-    if (values.length === 0) return 0;
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    return values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length;
+
+  calculateExcitementBoost() {
+    if (this.ema === null) this.ema = this.musicalityScore;
+    this.ema = MODEL_PARAMS.EMA_ALPHA * this.musicalityScore + (1 - MODEL_PARAMS.EMA_ALPHA) * this.ema;
+
+    const delta = this.musicalityScore - this.ema; // -100..100
+    const normDelta = clamp(delta / 100, -1, 1);   // -1 .. 1
+
+    if (normDelta > 0) {
+      return normDelta * MODEL_PARAMS.BOOST_POS; // positive boost
+    }
+    return normDelta * MODEL_PARAMS.BOOST_NEG; // negative (decay) value
   }
 }
 

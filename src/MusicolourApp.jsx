@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
 import FluidCanvas from './FluidCanvas';
 import { createFluidSimulation } from './webgl-fluid-wrapper';
-import MusicalityEngine from './musicalityEngine';
+import MusicalityEngine, { MODEL_PARAMS } from './musicalityEngine';
 
 // Initialize Tone.js
 Tone.start();
@@ -306,11 +306,23 @@ function MusicolourApp() {
   // ---------------- TUNABLE PARAMETERS ----------------
   // Simplified parameters for musicality-based system
   const [showDebug, setShowDebug] = useState(false);
+  const [showParams, setShowParams] = useState(false);
   const [showKeyboard, setShowKeyboard] = useState(true);
   const [showToggleButton, setShowToggleButton] = useState(false);
   const [showBottomButton, setShowBottomButton] = useState(false);
   const hideButtonTimeout = useRef(null);
   const showButtonTimeout = useRef(null);
+  
+  const [paramsState, setParamsState] = useState({ ...MODEL_PARAMS });
+
+  const updateParam = (key, value) => {
+    MODEL_PARAMS[key] = value;
+    setParamsState(prev => ({ ...prev, [key]: value }));
+    // Reset only the moving baseline so new parameters take effect smoothly
+    if (musicalityEngineRef.current) {
+      musicalityEngineRef.current.ema = null;
+    }
+  };
   
   // MIDI support
   const [midiEnabled, setMidiEnabled] = useState(false);
@@ -413,6 +425,12 @@ function MusicolourApp() {
       // Toggle keyboard with 'K' key
       if (event.code === 'KeyK' && event.shiftKey) {
         setShowKeyboard(prev => !prev);
+        return;
+      }
+
+      // Toggle parameters panel with Shift + L
+      if (event.code === 'KeyL' && event.shiftKey) {
+        setShowParams(prev => !prev);
         return;
       }
       
@@ -846,6 +864,53 @@ function MusicolourApp() {
           {Object.entries(systemState.musicalityMetrics).map(([key, value]) => (
             <div key={key}>{key}: {(value || 0).toFixed(3)}</div>
           ))}
+        </div>
+      )}
+
+      {/* Parameters Panel */}
+      {showParams && (
+        <div className="fixed right-4 top-4 bg-gray-800 bg-opacity-90 text-white p-4 rounded-lg z-40 text-xs font-mono w-64 max-h-[90vh] overflow-y-auto">
+          <h3 className="font-bold mb-3 text-sm">Model Parameters</h3>
+          {Object.entries(paramsState).map(([key, val]) => {
+            const sliderProps = {
+              HISTORY: { min: 8, max: 64, step: 1 },
+              IOI_WIN: { min: 4, max: 32, step: 1 },
+              VEL_WIN: { min: 4, max: 32, step: 1 },
+              CHORD_WINDOW: { min: 50, max: 1000, step: 50 },
+              EMA_ALPHA: { min: 0.01, max: 0.5, step: 0.01 },
+              BOOST_POS: { min: 0.01, max: 0.2, step: 0.005 },
+              BOOST_NEG: { min: 0.005, max: 0.1, step: 0.005 }
+            }[key];
+
+            if (!sliderProps) return null;
+
+            return (
+              <div key={key} className="mb-3">
+                <label className="flex justify-between items-center mb-1">
+                  <span>{key}</span>
+                  <span className="ml-2 text-right">
+                    {typeof val === 'number' ? val.toFixed(2) : val}
+                  </span>
+                </label>
+                <input
+                  type="range"
+                  className="w-full"
+                  value={val}
+                  min={sliderProps.min}
+                  max={sliderProps.max}
+                  step={sliderProps.step}
+                  onChange={e => {
+                    const num = parseFloat(e.target.value);
+                    if (['EMA_ALPHA', 'BOOST_POS', 'BOOST_NEG'].includes(key)) {
+                      updateParam(key, num);
+                    } else {
+                      updateParam(key, Math.round(num));
+                    }
+                  }}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
 
