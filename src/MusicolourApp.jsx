@@ -3,9 +3,10 @@ import * as Tone from 'tone';
 import FluidCanvas from './FluidCanvas';
 import { createFluidSimulation } from './webgl-fluid-wrapper';
 import ParameterSliders from './ParameterSliders';
+import MidiInputSelector from './MidiInputSelector';
 
-// Initialize Tone.js
-Tone.start();
+// Initialize Tone.js - REMOVED from here, will be started by user gesture.
+// Tone.start();
 
 // Regional repetition tracking helpers
 const getKeyRegion = (keyIndex) => {
@@ -442,6 +443,8 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
 function MusicolourApp() {
   const [pressedKeys, setPressedKeys] = useState(new Set());
   const fluidCanvasRef = useRef(null);
+  const [selectedMidiInput, setSelectedMidiInput] = useState(null);
+  const [isAudioStarted, setIsAudioStarted] = useState(false);
   
   // ---------------- TUNABLE PARAMETERS ----------------
   const paramDefs = {
@@ -506,61 +509,6 @@ function MusicolourApp() {
 
   const pianoRef = useRef(null);
   const keyTimeouts = useRef(new Map());
-
-  // Initialize piano with better sound
-  useEffect(() => {
-    pianoRef.current = new Tone.Sampler({
-      urls: {
-        C4: "C4.mp3",
-        "D#4": "Ds4.mp3",
-        "F#4": "Fs4.mp3",
-        A4: "A4.mp3",
-      },
-      release: 1,
-      baseUrl: "https://tonejs.github.io/audio/salamander/",
-    }).toDestination();
-
-    // Fallback to synthetic piano if samples don't load
-    const synthPiano = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 1 }
-    }).toDestination();
-
-    if (!pianoRef.current.loaded) {
-      pianoRef.current = synthPiano;
-    }
-
-    return () => {
-      if (pianoRef.current) {
-        pianoRef.current.dispose();
-      }
-    };
-  }, []);
-
-  // Keyboard event handling
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      const key = PIANO_KEYS.find(k => k.keyCode === event.code);
-      if (key && !pressedKeys.has(key.note)) {
-        handleKeyPress(key);
-      }
-    };
-
-    const handleKeyUp = (event) => {
-      const key = PIANO_KEYS.find(k => k.keyCode === event.code);
-      if (key) {
-        handleKeyRelease(key);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  });
 
   // Pask's Novelty Engine - calculates novelty scores for each cell
   const calculateNoveltyScores = useCallback((triggeredCellIndex, envelopeValue) => {
@@ -800,75 +748,50 @@ function MusicolourApp() {
         
         // Reset boredom bias after successful competition
         adaptiveSystem.boredomBias = 0;
-      } else {
-        // Increase boredom bias when no cell wins competition
-        adaptiveSystem.boredomBias = Math.min(1, adaptiveSystem.boredomBias + 0.01);
       }
       
-      // Add pattern and speed boredom to visual boredom bias
-      const totalBoredom = newPatternBoredom + newSpeedPenalty;
-      adaptiveSystem.boredomBias = Math.min(1, adaptiveSystem.boredomBias + totalBoredom * 0.3);
+      // Get regional heat (how often notes in this region have been played)
+      const currentRegion = getKeyRegion(noteIndex);
+      let newRepetitionFactor = prev.currentRepetitionFactor;
+      const newRegionCounters = { ...prev.regionRepetitionCounters };
       
+      if (isDistantRegion(prev.lastRegion, currentRegion)) {
+        // Reset repetition factor if playing in a new, distant area
+        newRepetitionFactor = 1.0;
+      } else {
+        // Increase repetition factor if staying in the same area
+        newRepetitionFactor = Math.min(3.0, newRepetitionFactor + 0.1);
+      }
+      
+      // Update region counters and calculate heat penalty
+      const influencedRegions = getInfluencedRegions(noteIndex);
+      influencedRegions.forEach(r => {
+        newRegionCounters[r] = (newRegionCounters[r] || 0) + 1;
+      });
+      const regionalHeat = getRegionalHeat(newRegionCounters, noteIndex);
+      const heatPenalty = 1.0 - Math.min(0.8, regionalHeat * params.repetitionHeatPenaltyFactor);
+      
+      // Calculate base excitement increase (now with novelty)
       const baseIncrease = calculateBaseExcitementIncrease(noteIndex, prev.lastNoteIndex, currentNoveltyScore);
+      
+      // Calculate distance multiplier
       const distanceMultiplier = calculateDistanceMultiplier(noteIndex, prev.lastNoteIndex);
       
-      // Apply pattern boredom and speed penalties
-      const patternPenalty = 1 - (newPatternBoredom * params.patternPenaltyWeight); // Tunable pattern penalty
-      const speedPenaltyFactor = 1 - newSpeedPenalty * params.speedPenaltyWeight;
+      // Combine all factors for excitement calculation
+      const totalPenaltyFactor = (1 - newPatternBoredom * params.patternPenaltyWeight) * (1 - newSpeedPenalty * params.speedPenaltyWeight) * heatPenalty;
       
-      // Get current region and check regional repetition
-      const currentRegion = getKeyRegion(noteIndex);
-      const influencedRegions = getInfluencedRegions(noteIndex);
-      const regionalHeat = getRegionalHeat(prev.regionRepetitionCounters, noteIndex);
+      let excitementChange = baseIncrease * totalPenaltyFactor;
       
-      // Apply Pask's boredom: reduce repetition factor based on adaptive thresholds
-      const currentCell = adaptiveSystem.cells[noteIndex];
-      const thresholdFactor = 1 - Math.min(0.6, (currentCell.threshold - 0.1) / 0.9 * 0.6); // Stronger threshold influence
+      // Apply gradual decay based on distance multiplier
+      const newExcitement = (prev.excitement + excitementChange) * distanceMultiplier;
       
-      const isStayingInRegion = !isDistantRegion(prev.lastRegion, currentRegion);
-      let newRepetitionFactor;
-      let newRegionCounters = { ...prev.regionRepetitionCounters };
-      
-      if (isStayingInRegion && regionalHeat > 0) {
-        // Aggressive boredom penalties for repetition
-        const heatPenalty = Math.min(0.7, regionalHeat * params.repetitionHeatPenaltyFactor);
-        const alpha = Math.max(0.2, distanceMultiplier - heatPenalty) * Math.max(0.5, thresholdFactor);
-        newRepetitionFactor = Math.max(0.1, prev.currentRepetitionFactor * alpha); // Lower floor for harsh punishment
-        
-        // Faster heat accumulation for boredom
-        influencedRegions.forEach(region => {
-          newRegionCounters[region] = (newRegionCounters[region] || 0) + 1.5; // Build heat even faster
-        });
-      } else {
-        newRepetitionFactor = Math.max(0.6, distanceMultiplier * Math.max(0.8, thresholdFactor));
-        
-        // Slower heat decay when moving regions
-        Object.keys(newRegionCounters).forEach(region => {
-          newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.5); // Slower decay
-        });
-        
-        // Start fresh heat in new regions
-        influencedRegions.forEach(region => {
-          newRegionCounters[region] = (newRegionCounters[region] || 0) + 0.5;
-        });
-      }
-      
-      let finalIncrease = baseIncrease * newRepetitionFactor * patternPenalty * speedPenaltyFactor;
-      
-      // If penalties are severe, make excitement actually decrease
-      const totalPenalty = (1 - patternPenalty) + (1 - speedPenaltyFactor) + (1 - newRepetitionFactor);
-      if (totalPenalty > 1.0) {
-        finalIncrease = -0.02; // Active punishment - excitement goes down
-      }
-      
-      const newExcitement = Math.max(0, Math.min(1, prev.excitement + finalIncrease));
-      
-      // Update adaptive thresholds state for UI display
+      // Store current adaptive thresholds for visualization/debugging
       const adaptiveThresholds = {};
-      Object.entries(adaptiveSystem.cells).forEach(([index, cell]) => {
-        adaptiveThresholds[index] = cell.threshold;
+      Object.entries(adaptiveSystem.cells).forEach(([id, cell]) => {
+        adaptiveThresholds[id] = cell.threshold;
       });
       
+      // Return updated state
       return {
         ...prev,
         excitement: newExcitement,
@@ -890,6 +813,144 @@ function MusicolourApp() {
       };
     });
   }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, detectSpeedPunishment, adaptiveSystem, params]);
+
+  const handleKeyRelease = useCallback((key) => {
+    setPressedKeys(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(key.note);
+      return newSet;
+    });
+    
+    if (pianoRef.current) {
+      pianoRef.current.triggerRelease(key.note);
+    }
+
+    // Clear timeout
+    if (keyTimeouts.current.has(key.note)) {
+      clearTimeout(keyTimeouts.current.get(key.note));
+      keyTimeouts.current.delete(key.note);
+    }
+  }, []);
+
+  const handleKeyPress = useCallback((key, velocity = 0.75) => {
+    if (pressedKeys.has(key.note)) return;
+    
+    setPressedKeys(prev => new Set([...prev, key.note]));
+    
+    if (pianoRef.current) {
+      pianoRef.current.triggerAttack(key.note);
+    }
+
+    const noteIndex = PIANO_KEYS.findIndex(k => k.note === key.note);
+    
+    // Update system with Pask's adaptive algorithm first
+    updateSystemExcitement(noteIndex, velocity);
+    
+    // Trigger fluid splats based on excitement level
+    if (fluidCanvasRef.current) {
+      // Determine number of splats based on excitement level
+      let numSplats = 1;
+      if (systemState.excitement > 0.9) {
+        numSplats = 8;
+      } else if (systemState.excitement > 0.75) {
+        numSplats = 4;
+      } else if (systemState.excitement > 0.5) {
+        numSplats = 3;
+      } else if (systemState.excitement > 0.25) {
+        numSplats = 2;
+      }
+      
+      // Trigger multiple splats
+      for (let i = 0; i < numSplats; i++) {
+        fluidCanvasRef.current.triggerSplat(systemState.excitement, velocity);
+      }
+    }
+
+    // Auto-release after timeout if not manually released
+    keyTimeouts.current.set(key.note, setTimeout(() => {
+      handleKeyRelease(key);
+    }, 500));
+  }, [pressedKeys, systemState.excitement, updateSystemExcitement, handleKeyRelease]);
+
+  // Initialize piano with better sound
+  useEffect(() => {
+    pianoRef.current = new Tone.Sampler({
+      urls: {
+        C4: "C4.mp3",
+        "D#4": "Ds4.mp3",
+        "F#4": "Fs4.mp3",
+        A4: "A4.mp3",
+      },
+      release: 1,
+      baseUrl: "https://tonejs.github.io/audio/salamander/",
+    }).toDestination();
+
+    // Fallback to synthetic piano if samples don't load
+    const synthPiano = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 1 }
+    }).toDestination();
+
+    if (!pianoRef.current.loaded) {
+      pianoRef.current = synthPiano;
+    }
+
+    return () => {
+      if (pianoRef.current) {
+        pianoRef.current.dispose();
+      }
+    };
+  }, []);
+
+  // Keyboard event handling
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      const key = PIANO_KEYS.find(k => k.keyCode === event.code);
+      if (key && !pressedKeys.has(key.note)) {
+        handleKeyPress(key);
+      }
+    };
+
+    const handleKeyUp = (event) => {
+      const key = PIANO_KEYS.find(k => k.keyCode === event.code);
+      if (key) {
+        handleKeyRelease(key);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  },[handleKeyPress, handleKeyRelease, pressedKeys]);
+
+  // MIDI event handling
+    useEffect(() => {
+      if (!selectedMidiInput) return;
+  
+      const handleMidiMessage = (event) => {
+        const [command, noteNumber, velocity] = event.data;
+        const noteName = Tone.Frequency(noteNumber, 'midi').toNote();
+        const keyData = PIANO_KEYS.find(k => k.note === noteName);
+  
+        if (!keyData) return;
+  
+        if (command === 144 && velocity > 0) { // Note On
+          handleKeyPress(keyData, velocity / 127);
+        } else if (command === 128 || (command === 144 && velocity === 0)) { // Note Off
+          handleKeyRelease(keyData);
+        }
+      };
+  
+      selectedMidiInput.addEventListener('midimessage', handleMidiMessage);
+  
+      return () => {
+        selectedMidiInput.removeEventListener('midimessage', handleMidiMessage);
+      };
+    }, [selectedMidiInput, handleKeyPress, handleKeyRelease]);
 
   // Pask's adaptive boredom decay system with threshold updates
   useEffect(() => {
@@ -927,98 +988,21 @@ function MusicolourApp() {
           }
         }
         
-        if (timeSinceLastKey > 800) { // Faster recovery
-          newRepetitionFactor = Math.min(1.0, newRepetitionFactor + 0.02); // Faster factor recovery
-          
-          // Faster heat cooling
-          Object.keys(newRegionCounters).forEach(region => {
-            newRegionCounters[region] = Math.max(0, newRegionCounters[region] - 0.05);
-          });
-        }
-        
-        // Update adaptive thresholds for UI
-        const adaptiveThresholds = {};
-        Object.entries(adaptiveSystem.cells).forEach(([index, cell]) => {
-          adaptiveThresholds[index] = cell.threshold;
-        });
-        
+        // Return updated state
         return {
           ...prev,
           excitement: newExcitement,
+          lastKeyPressTime: prev.lastKeyPressTime,
           currentRepetitionFactor: newRepetitionFactor,
           regionRepetitionCounters: newRegionCounters,
-          adaptiveThresholds,
           patternBoredom: newPatternBoredom,
-          speedPenalty: newSpeedPenalty
+          speedPenalty: newSpeedPenalty,
         };
       });
-    }, 16);
+    }, 1000 / 60); // 60 times per second
 
     return () => clearInterval(decayInterval);
-  }, [adaptiveSystem, params]);
-
-
-
-  const handleKeyPress = useCallback((key) => {
-    if (pressedKeys.has(key.note)) return;
-    
-    setPressedKeys(prev => new Set([...prev, key.note]));
-    
-    if (pianoRef.current) {
-      pianoRef.current.triggerAttack(key.note);
-    }
-
-    const noteIndex = PIANO_KEYS.findIndex(k => k.note === key.note);
-    const velocity = 0.5 + Math.random() * 0.5; // Simulate velocity
-    
-    // Update system with Pask's adaptive algorithm first
-    updateSystemExcitement(noteIndex, velocity);
-    
-    // Trigger fluid splats based on excitement level
-    if (fluidCanvasRef.current) {
-      // Determine number of splats based on excitement level
-      let numSplats = 1;
-      if (systemState.excitement > 0.9) {
-        numSplats = 8;
-      } else if (systemState.excitement > 0.75) {
-        numSplats = 4;
-      } else if (systemState.excitement > 0.5) {
-        numSplats = 3;
-      } else if (systemState.excitement > 0.25) {
-        numSplats = 2;
-      }
-      
-      // Trigger multiple splats
-      for (let i = 0; i < numSplats; i++) {
-        fluidCanvasRef.current.triggerSplat(systemState.excitement);
-      }
-    }
-
-    // Auto-release after timeout if not manually released
-    keyTimeouts.current.set(key.note, setTimeout(() => {
-      handleKeyRelease(key);
-    }, 500));
-  }, [pressedKeys, systemState.excitement, systemState.noveltyEngine.wheelPosition, updateSystemExcitement]);
-
-  const handleKeyRelease = useCallback((key) => {
-    setPressedKeys(prev => {
-      const newSet = new Set(prev);
-      newSet.delete(key.note);
-      return newSet;
-    });
-    
-    if (pianoRef.current) {
-      pianoRef.current.triggerRelease(key.note);
-    }
-
-    // Clear timeout
-    if (keyTimeouts.current.has(key.note)) {
-      clearTimeout(keyTimeouts.current.get(key.note));
-      keyTimeouts.current.delete(key.note);
-    }
-  }, []);
-
-
+  }, [adaptiveSystem, params.excitementDecayRate]);
 
   const getMoodData = () => {
     const excitement = systemState.excitement;
@@ -1032,6 +1016,22 @@ function MusicolourApp() {
     }
   };
 
+  if (!isAudioStarted) {
+    return (
+      <div className="w-full h-screen bg-black flex justify-center items-center text-white">
+        <button
+          onClick={async () => {
+            await Tone.start();
+            setIsAudioStarted(true);
+          }}
+          className="p-6 bg-blue-600 rounded-lg text-2xl font-bold hover:bg-blue-700 transition-colors shadow-lg"
+        >
+          Click Here to Start Musicolour
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full h-screen bg-black overflow-hidden relative">
       <ParameterSliders paramDefs={paramDefs} params={params} onParamChange={handleParamChange} />
@@ -1039,6 +1039,9 @@ function MusicolourApp() {
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-black tracking-tight mb-2" style={{ fontWeight: 900 }}>MUSICOLOUR</h1>
         <h3 className=" tracking-tight">By Gui Dávid. Inspired by Gordon Pask.</h3>
+        <div className="absolute top-20 left-0">
+          <MidiInputSelector onDeviceSelected={setSelectedMidiInput} />
+        </div>
       </div>
       
       {/* Power Bar */}

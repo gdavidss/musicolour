@@ -1561,11 +1561,20 @@ function hashCode (s) {
     return hash;
 };
 
+let animationFrameId = null;
+
+function destroy() {
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+    }
+    // TODO: Add any other necessary cleanup, like deleting buffers and programs
+}
+
 // Return API for the module
 return {
     splat,
+    splatStack,
     config,
-    canvas
-};
-
+    destroy
+  };
 } // End of initializeFluidSimulation function
