@@ -709,16 +709,64 @@ function MusicolourApp() {
     };
   }, []);
 
+  // Animated tab title
+  useEffect(() => {
+    const title = "MUSICOLOUR";
+    let position = -2; // Start before the wave enters
+    
+    const animateTitle = () => {
+      const titleArray = title.toLowerCase().split('');
+      
+      // Create wave effect - capitalize 2-3 letters at the wave position
+      for (let i = 0; i < titleArray.length; i++) {
+        // Create a wave that's 2 letters wide
+        if (i === position || i === position + 1) {
+          titleArray[i] = titleArray[i].toUpperCase();
+        }
+      }
+      
+      document.title = titleArray.join('');
+      
+      // Move wave position
+      position++;
+      
+      // Reset when wave has passed through
+      if (position > title.length) {
+        position = -2;
+      }
+    };
+    
+    // Initial title
+    document.title = title;
+    
+    // Update every second
+    const intervalId = setInterval(animateTitle, 1000);
+    
+    return () => {
+      clearInterval(intervalId);
+      document.title = "MUSICOLOUR"; // Reset to normal on unmount
+    };
+  }, []);
+
   return (
     <div className="w-full h-screen bg-black relative">
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-semibold tracking-tight mb-2">MUSICOLOUR</h1>
         <h3 className="font-light tracking-tight">
-          By <a href="https://x.com/sinalalgedonico" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">Gui Dávid</a>. Inspired by Gordon Pask.
+          By <a href="https://www.linkedin.com/in/gdavidss/" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">Gui Dávid</a>. Inspired by Gordon Pask.
         </h3>
         <div className="text-xs text-gray-300 mt-1">
-          Made for the <span className="italic">San Francisco Cybernetics Symposium</span>
+          Made for the <span className="italic">
+            <a
+              href="https://partiful.com/e/KAyicRaedj3ORP1WfCsk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-blue-300"
+            >
+              San Francisco Cybernetics Symposium
+            </a>
+          </span>
         </div>
       </div>
       
@@ -754,10 +802,10 @@ function MusicolourApp() {
       )}
 
       {/* Fluid Canvas */}
-      <div className="absolute inset-0">
+      <div className="absolute inset-0" style={{ overflow: 'hidden' }}>
         <FluidCanvas 
           ref={fluidCanvasRef}
-          className="w-full h-full"
+          className=""
         />
       </div>
 

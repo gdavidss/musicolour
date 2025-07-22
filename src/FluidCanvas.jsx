@@ -17,8 +17,14 @@ const FluidCanvas = forwardRef(({ className }, ref) => {
 
   useEffect(() => {
     if (canvasRef.current) {
-      // Initialize the fluid simulation
-      simulationRef.current = createFluidSimulation(canvasRef.current);
+      // Use requestAnimationFrame to ensure the canvas has been laid out
+      const initSimulation = () => {
+        // Initialize the fluid simulation
+        simulationRef.current = createFluidSimulation(canvasRef.current);
+      };
+      
+      // Wait for next frame to ensure canvas dimensions are set
+      requestAnimationFrame(initSimulation);
     }
 
     return () => {
@@ -33,7 +39,13 @@ const FluidCanvas = forwardRef(({ className }, ref) => {
     <canvas
       ref={canvasRef}
       className={className}
-      style={{ width: '100%', height: '100%' }}
+      style={{ 
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%'
+      }}
     />
   );
 });
