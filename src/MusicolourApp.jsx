@@ -446,6 +446,7 @@ function MusicolourApp() {
   const [selectedMidiInput, setSelectedMidiInput] = useState(null);
   const [isAudioStarted, setIsAudioStarted] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [sustainActive, setSustainActive] = useState(false);
   
   // ---------------- TUNABLE PARAMETERS ----------------
   const paramDefs = {
@@ -457,7 +458,8 @@ function MusicolourApp() {
     patternPenaltyWeight: { label: 'Pattern Penalty', min: 0, max: 2, step: 0.01, default: 0.8 },
     speedPenaltyWeight: { label: 'Speed Penalty', min: 0, max: 2, step: 0.01, default: 1 },
     excitementDecayRate: { label: 'Decay Rate', min: 0.05, max: 0.5, step: 0.01, default: 0.15 },
-    repetitionHeatPenaltyFactor: { label: 'Heat Penalty', min: 0, max: 0.5, step: 0.01, default: 0.15 }
+    repetitionHeatPenaltyFactor: { label: 'Heat Penalty', min: 0, max: 0.5, step: 0.01, default: 0.15 },
+    sustainMultiplier: { label: 'Sustain Mult', min: 1, max: 5, step: 0.5, default: 3 }
   };
 
   const [params, setParams] = useState(() => {
@@ -815,7 +817,9 @@ function MusicolourApp() {
     });
   }, [calculateBaseExcitementIncrease, calculateDistanceMultiplier, calculateNoveltyScores, detectPatternBoredom, detectSpeedPunishment, adaptiveSystem, params]);
 
-  const handleKeyRelease = useCallback((key) => {
+  const handleKeyRelease = useCallback((key, ignoreSustain = false) => {
+    if (sustainActive && !ignoreSustain) return;
+
     setPressedKeys(prev => {
       const newSet = new Set(prev);
       newSet.delete(key.note);
@@ -831,7 +835,7 @@ function MusicolourApp() {
       clearTimeout(keyTimeouts.current.get(key.note));
       keyTimeouts.current.delete(key.note);
     }
-  }, []);
+  }, [sustainActive]);
 
   const handleKeyPress = useCallback((key, velocity = 0.75) => {
     if (pressedKeys.has(key.note)) return;
@@ -868,10 +872,13 @@ function MusicolourApp() {
     }
 
     // Auto-release after timeout if not manually released
+    const baseDuration = 500;
+    const duration = baseDuration * (sustainActive ? params.sustainMultiplier : 1);
+
     keyTimeouts.current.set(key.note, setTimeout(() => {
-      handleKeyRelease(key);
-    }, 500));
-  }, [pressedKeys, systemState.excitement, updateSystemExcitement, handleKeyRelease]);
+      handleKeyRelease(key, true);
+    }, duration));
+  }, [pressedKeys, systemState.excitement, updateSystemExcitement, sustainActive, params.sustainMultiplier]);
 
   // Initialize piano with better sound
   useEffect(() => {
@@ -1094,12 +1101,19 @@ function MusicolourApp() {
       </div>
 
       {/* Piano Interface */}
-      <div className="absolute bottom-0 left-0 right-0 p-6">
+      <div className="absolute bottom-0 left-0 right-0 p-6 flex justify-center">
         <Piano
           onKeyPress={handleKeyPress}
           onKeyRelease={handleKeyRelease}
           pressedKeys={pressedKeys}
         />
+        <button
+          onClick={() => setSustainActive(prev => !prev)}
+          aria-label="Toggle sustain"
+          className={`ml-4 self-end mb-8 w-10 h-10 flex items-center justify-center rounded-full border border-gray-500 text-xl font-bold transition-colors ${sustainActive ? 'bg-yellow-400 text-black' : 'bg-gray-700 text-white'}`}
+        >
+          -
+        </button>
       </div>
     </div>
   );
