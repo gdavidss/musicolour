@@ -10,6 +10,42 @@ export function createFluidSimulation(canvas) {
   // Store the splat function reference
   const splatFunction = fluidSim.splat;
 
+  // Track recent splats for brightness adjustment
+  const recentSplats = [];
+  const SPLAT_WINDOW = 500; // Track splats within last 500ms
+  const MAX_SPLATS_BEFORE_DIMMING = 5; // Start dimming after 5 splats
+  const MIN_BRIGHTNESS_MULTIPLIER = 0.3; // Minimum brightness when many splats
+
+  // Clean up old splats from tracking
+  function cleanupRecentSplats() {
+    const now = Date.now();
+    const cutoffTime = now - SPLAT_WINDOW;
+    
+    // Remove splats older than the window
+    while (recentSplats.length > 0 && recentSplats[0] < cutoffTime) {
+      recentSplats.shift();
+    }
+  }
+
+  // Calculate brightness multiplier based on recent splat activity
+  function calculateBrightnessMultiplier() {
+    cleanupRecentSplats();
+    
+    const splatCount = recentSplats.length;
+    
+    if (splatCount <= MAX_SPLATS_BEFORE_DIMMING) {
+      return 1.0; // Full brightness
+    }
+    
+    // Linear interpolation between 1.0 and MIN_BRIGHTNESS_MULTIPLIER
+    // based on splat count between MAX_SPLATS_BEFORE_DIMMING and 3x that value
+    const excessSplats = splatCount - MAX_SPLATS_BEFORE_DIMMING;
+    const maxExcess = MAX_SPLATS_BEFORE_DIMMING * 2; // When we reach 15 splats
+    const dimFactor = Math.min(excessSplats / maxExcess, 1.0);
+    
+    return 1.0 - (dimFactor * (1.0 - MIN_BRIGHTNESS_MULTIPLIER));
+  }
+
   // Generate color based on excitement level
   function generateExcitementColor(excitementLevel) {
     const hue = Math.random();
@@ -23,12 +59,17 @@ export function createFluidSimulation(canvas) {
     c.g *= 0.15;
     c.b *= 0.15;
     
+    // Calculate brightness multiplier based on recent splat activity
+    const brightnessMultiplier = calculateBrightnessMultiplier();
+    
     // Then apply the multiplier like multipleSplats does (10.0)
-    // But scale it based on excitement for visibility
-    const multiplier = 8.0 + (excitementLevel * 4.0); // Range: 8.0 to 12.0
-    c.r *= multiplier;
-    c.g *= multiplier;
-    c.b *= multiplier;
+    // But scale it based on excitement for visibility AND recent activity
+    const baseMultiplier = 8.0 + (excitementLevel * 4.0); // Range: 8.0 to 12.0
+    const finalMultiplier = baseMultiplier * brightnessMultiplier;
+    
+    c.r *= finalMultiplier;
+    c.g *= finalMultiplier;
+    c.b *= finalMultiplier;
     
     return c;
   }
@@ -57,6 +98,9 @@ export function createFluidSimulation(canvas) {
   return {
     triggerSplat: (excitementLevel) => {
       if (!splatFunction) return;
+      
+      // Track this splat
+      recentSplats.push(Date.now());
       
       // Generate random position and direction
       const x = Math.random();

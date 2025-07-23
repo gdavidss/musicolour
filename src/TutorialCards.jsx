@@ -50,7 +50,7 @@ const CARDS = [
     id: 'conversation',
     content: (
       <p className="text-3xl font-light leading-relaxed">
-        You're having a conversation<br />with a machine through music
+        You're having a <a href="https://en.wikipedia.org/wiki/Conversation_theory" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">conversation</a><br />with a machine through music
       </p>
     )
   },
@@ -110,6 +110,15 @@ export function TutorialCards({ onComplete, onSkip }) {
   const mountTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
 
+  // Mark tutorial as seen in localStorage
+  const markTutorialAsSeen = () => {
+    try {
+      localStorage.setItem('musicolour-tutorial-seen', 'true');
+    } catch (e) {
+      console.error('Failed to save tutorial state:', e);
+    }
+  };
+
   useEffect(() => {
     // Component initialization
     
@@ -126,6 +135,7 @@ export function TutorialCards({ onComplete, onSkip }) {
       if (elapsed >= totalDuration && !completedRef.current) {
         completedRef.current = true;
         setIsActive(false);
+        markTutorialAsSeen(); // Save to localStorage
         if (onComplete) {
           onComplete();
         }
@@ -157,7 +167,10 @@ export function TutorialCards({ onComplete, onSkip }) {
     <>
       {/* Skip button */}
       <button
-        onClick={onSkip}
+        onClick={() => {
+          markTutorialAsSeen(); // Save to localStorage when skipped
+          onSkip();
+        }}
         className="fixed top-8 right-8 text-white text-4xl hover:text-gray-300 transition-all duration-200 hover:scale-110"
         style={{ 
           zIndex: 100000,
@@ -188,7 +201,6 @@ export function TutorialCards({ onComplete, onSkip }) {
           padding: '48px',
           maxWidth: '800px',
           textAlign: 'center',
-          pointerEvents: 'none',
           textShadow: '0 2px 20px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.9)'
         }}
       >

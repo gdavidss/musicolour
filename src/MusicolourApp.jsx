@@ -720,6 +720,7 @@ function MusicolourApp() {
       // Replay tutorial with Shift + M
       if (event.code === 'KeyM' && event.shiftKey) {
         setShowTutorial(true);
+        setShowKeyboard(true); // Show keyboard during tutorial replay
         playSong(0, false); // Play demo without looping
         return;
       }
@@ -1019,14 +1020,19 @@ function MusicolourApp() {
 
   // Show tutorial on load (only once)
   useEffect(() => {
-    setShowTutorial(true);
-    setShowKeyboard(true); // Show keyboard during tutorial
-    // Start demo song without looping after a short delay
-    const timer = setTimeout(() => {
-      playSongRef.current(0, false); // Play demo song once, no loop
-    }, 2000); // Wait 2 seconds before starting the demo
+    // Check if user has already seen the tutorial
+    const hasSeenTutorial = localStorage.getItem('musicolour-tutorial-seen') === 'true';
     
-    return () => clearTimeout(timer);
+    if (!hasSeenTutorial) {
+      setShowTutorial(true);
+      setShowKeyboard(true); // Show keyboard during tutorial
+      // Start demo song without looping after a short delay
+      const timer = setTimeout(() => {
+        playSongRef.current(0, false); // Play demo song once, no loop
+      }, 2000); // Wait 2 seconds before starting the demo
+      
+      return () => clearTimeout(timer);
+    }
   }, []); // Empty dependency array - run only once on mount
 
   // Clean up any scheduled timeouts on unmount
@@ -1152,7 +1158,7 @@ function MusicolourApp() {
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-semibold tracking-tight mb-2">MUSICOLOUR</h1>
         <h3 className="font-light tracking-tight">
-          By <a href="https://www.linkedin.com/in/gdavidss/" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">Gui Dávid</a>. Inspired by Gordon Pask.
+          By <a href="https://www.linkedin.com/in/gdavidss/" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">Gui Dávid</a>. Inspired by <a href="https://en.wikipedia.org/wiki/Gordon_Pask" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">Gordon Pask</a>.
         </h3>
         <div className="text-xs text-gray-300 mt-1">
           Made for the <span className="italic">
