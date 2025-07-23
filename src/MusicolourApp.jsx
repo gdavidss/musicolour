@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
 import FluidCanvas from './FluidCanvas';
-import { createFluidSimulation } from './webgl-fluid-wrapper';
+// import { createFluidSimulation } from './webgl-fluid-wrapper';
 import MusicalityEngine, { MODEL_PARAMS } from './musicalityEngine';
 import { useAutoplayer, AutoplayerPanel } from './Autoplayer.jsx';
+import { TutorialCards } from './TutorialCards.jsx';
+import { InfoIcon } from './InfoIcon.jsx';
 
 // Initialize Tone.js
 Tone.start();
@@ -69,70 +71,69 @@ function PianoKey({ keyData, isPressed, onPress, onRelease }) {
   );
 }
 
-// Helper function to interpolate between two colors
-const interpolateColor = (color1, color2, factor) => {
-  const c1 = parseInt(color1.slice(1), 16);
-  const c2 = parseInt(color2.slice(1), 16);
-  
-  const r1 = (c1 >> 16) & 0xff;
-  const g1 = (c1 >> 8) & 0xff;
-  const b1 = c1 & 0xff;
-  
-  const r2 = (c2 >> 16) & 0xff;
-  const g2 = (c2 >> 8) & 0xff;
-  const b2 = c2 & 0xff;
-  
-  const r = Math.round(r1 + (r2 - r1) * factor);
-  const g = Math.round(g1 + (g2 - g1) * factor);
-  const b = Math.round(b1 + (b2 - b1) * factor);
-  
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-};
+// Unused color interpolation functions - might be useful for future color features
+// const interpolateColor = (color1, color2, factor) => {
+//   const c1 = parseInt(color1.slice(1), 16);
+//   const c2 = parseInt(color2.slice(1), 16);
+//   
+//   const r1 = (c1 >> 16) & 0xff;
+//   const g1 = (c1 >> 8) & 0xff;
+//   const b1 = c1 & 0xff;
+//   
+//   const r2 = (c2 >> 16) & 0xff;
+//   const g2 = (c2 >> 8) & 0xff;
+//   const b2 = c2 & 0xff;
+//   
+//   const r = Math.round(r1 + (r2 - r1) * factor);
+//   const g = Math.round(g1 + (g2 - g1) * factor);
+//   const b = Math.round(b1 + (b2 - b1) * factor);
+//   
+//   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+// };
 
-// Smooth color interpolation based on excitement level
-const getInterpolatedColor = (level) => {
-  // Create a smooth gradient from gray to rainbow spectrum
-  // Gray -> Red -> Orange -> Yellow -> Green -> Blue -> Purple
-  
-  if (level === 0) return '#6c757d'; // Gray when completely bored
-  
-  // Define rainbow spectrum colors
-  const rainbowColors = [
-    { pos: 0, color: '#6c757d' },     // Gray
-    { pos: 0.16, color: '#ff0000' },  // Red
-    { pos: 0.33, color: '#ff8800' },  // Orange
-    { pos: 0.5, color: '#ffff00' },   // Yellow
-    { pos: 0.66, color: '#00ff00' },  // Green
-    { pos: 0.83, color: '#0088ff' },  // Blue
-    { pos: 1, color: '#8800ff' }      // Purple
-  ];
-  
-  // Find which two colors we're between
-  let color1, color2, localT;
-  
-  for (let i = 0; i < rainbowColors.length - 1; i++) {
-    if (level >= rainbowColors[i].pos && level <= rainbowColors[i + 1].pos) {
-      color1 = rainbowColors[i];
-      color2 = rainbowColors[i + 1];
-      // Calculate local t value between these two colors
-      localT = (level - color1.pos) / (color2.pos - color1.pos);
-      break;
-    }
-  }
-  
-  // If we didn't find a range (shouldn't happen), use the last color
-  if (!color1 || !color2) {
-    return rainbowColors[rainbowColors.length - 1].color;
-  }
-  
-  return interpolateColor(color1.color, color2.color, localT);
-};
+// const getInterpolatedColor = (level) => {
+//   // Create a smooth gradient from gray to rainbow spectrum
+//   // Gray -> Red -> Orange -> Yellow -> Green -> Blue -> Purple
+//   
+//   if (level === 0) return '#6c757d'; // Gray when completely bored
+//   
+//   // Define rainbow spectrum colors
+//   const rainbowColors = [
+//     { pos: 0, color: '#6c757d' },     // Gray
+//     { pos: 0.16, color: '#ff0000' },  // Red
+//     { pos: 0.33, color: '#ff8800' },  // Orange
+//     { pos: 0.5, color: '#ffff00' },   // Yellow
+//     { pos: 0.66, color: '#00ff00' },  // Green
+//     { pos: 0.83, color: '#0088ff' },  // Blue
+//     { pos: 1, color: '#8800ff' }      // Purple
+//   ];
+//   
+//   // Find which two colors we're between
+//   let color1, color2, localT;
+//   
+//   for (let i = 0; i < rainbowColors.length - 1; i++) {
+//     if (level >= rainbowColors[i].pos && level <= rainbowColors[i + 1].pos) {
+//       color1 = rainbowColors[i];
+//       color2 = rainbowColors[i + 1];
+//       // Calculate local t value between these two colors
+//       localT = (level - color1.pos) / (color2.pos - color1.pos);
+//       break;
+//     }
+//   }
+//   
+//   // If we didn't find a range (shouldn't happen), use the last color
+//   if (!color1 || !color2) {
+//     return rainbowColors[rainbowColors.length - 1].color;
+//   }
+//   
+//   return interpolateColor(color1.color, color2.color, localT);
+// };
 
 // Thermometer Power Bar Component
 function PowerBar({ excitement = 0 }) {
   const [displayExcitement, setDisplayExcitement] = useState(excitement);
   const [targetExcitement, setTargetExcitement] = useState(excitement);
-  const animationRef = useRef();
+  // const animationRef = useRef();
   const lastUpdateTime = useRef(Date.now());
   const recentGainRef = useRef(Date.now()); // Initialize to now to prevent immediate red
   const lastExcitementRef = useRef(excitement);
@@ -243,7 +244,7 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
         transform: 'perspective(800px) rotateX(5deg)',
         transformStyle: 'preserve-3d'
       }}>
-        {PIANO_KEYS.filter(k => k.type === 'white').map((key, index) => (
+        {PIANO_KEYS.filter(k => k.type === 'white').map((key) => (
           <PianoKey
             key={key.note}
             keyData={key}
@@ -253,7 +254,7 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
           />
         ))}
         <div className="absolute top-0 left-0 right-0" style={{ pointerEvents: 'none' }}>
-          {PIANO_KEYS.filter(k => k.type === 'black').map((key, index) => {
+          {PIANO_KEYS.filter(k => k.type === 'black').map((key) => {
             // Map each black key to the white key it appears after
             const blackKeyAfterWhite = {
               'C#4': 'C4',
@@ -317,6 +318,9 @@ function MusicolourApp() {
   const hideButtonTimeout = useRef(null);
   const showButtonTimeout = useRef(null);
   
+  // Tutorial state
+  const [showTutorial, setShowTutorial] = useState(false);
+  
   const [paramsState, setParamsState] = useState({ ...MODEL_PARAMS });
 
   const updateParam = (key, value) => {
@@ -334,6 +338,7 @@ function MusicolourApp() {
   const [showMidiStatus, setShowMidiStatus] = useState(false);
   const midiAccessRef = useRef(null);
   const midiStatusTimeout = useRef(null);
+  const fileInputRef = useRef(null);
   
   const [systemState, setSystemState] = useState({
     excitement: 0, // 0 to 1 scale
@@ -357,31 +362,299 @@ function MusicolourApp() {
 
   const pianoRef = useRef(null);
 
+  // Simpler MIDI file parser focused on extracting notes
+  const parseMidiFile = async (file) => {
+    const buffer = await file.arrayBuffer();
+    const data = new Uint8Array(buffer);
+    
+    // Basic MIDI file validation
+    const header = String.fromCharCode(...data.slice(0, 4));
+    if (header !== 'MThd') {
+      throw new Error('Invalid MIDI file');
+    }
+    
+    // Read header info
+    const format = (data[8] << 8) | data[9];
+    const numTracks = (data[10] << 8) | data[11];
+    const division = (data[12] << 8) | data[13];
+    
+    console.log('MIDI format:', format, 'tracks:', numTracks, 'division:', division);
+    
+    // Simple approach: look for all Note On events (0x9n) in the file
+    const notes = [];
+    let ticksPerQuarter = division & 0x7FFF;
+    let microsecondsPerQuarter = 500000; // Default 120 BPM
+    
+    // Scan entire file for note events
+    let i = 14; // Skip header
+    let currentTime = 0;
+    
+    while (i < data.length - 4) {
+      // Look for MTrk
+      if (data[i] === 0x4D && data[i+1] === 0x54 && data[i+2] === 0x72 && data[i+3] === 0x6B) {
+        i += 4;
+        const trackLen = (data[i] << 24) | (data[i+1] << 16) | (data[i+2] << 8) | data[i+3];
+        i += 4;
+        
+        const trackEnd = i + trackLen;
+        let trackTime = 0;
+        let lastStatus = 0;
+        
+        while (i < trackEnd && i < data.length) {
+          // Read variable length delta time
+          let delta = 0;
+          let byte;
+          do {
+            if (i >= data.length) break;
+            byte = data[i++];
+            delta = (delta << 7) | (byte & 0x7F);
+          } while (byte & 0x80);
+          
+          trackTime += delta;
+          
+          if (i >= data.length) break;
+          
+          // Get status byte
+          let status = data[i];
+          if (status < 0x80) {
+            // Running status
+            status = lastStatus;
+          } else {
+            lastStatus = status;
+            i++;
+          }
+          
+          // Check for Note On
+          if ((status & 0xF0) === 0x90 && i + 1 < data.length) {
+            const note = data[i++];
+            const velocity = data[i++];
+            
+            if (velocity > 0) {
+              // Calculate time in milliseconds
+              const timeMs = (trackTime / ticksPerQuarter) * (microsecondsPerQuarter / 1000);
+              notes.push({
+                note: note,
+                time: Math.round(timeMs),
+                velocity: velocity / 127,
+                channel: status & 0x0F
+              });
+            }
+          }
+          // Note Off
+          else if ((status & 0xF0) === 0x80 && i + 1 < data.length) {
+            i += 2;
+          }
+          // Other channel messages
+          else if ((status & 0xF0) >= 0x80 && (status & 0xF0) <= 0xE0) {
+            // Skip parameters based on message type
+            if ((status & 0xF0) === 0xC0 || (status & 0xF0) === 0xD0) {
+              i += 1;
+            } else {
+              i += 2;
+            }
+          }
+          // Meta event
+          else if (status === 0xFF && i + 1 < data.length) {
+            const metaType = data[i++];
+            if (i >= data.length) break;
+            const len = data[i++];
+            
+            // Tempo change
+            if (metaType === 0x51 && len === 3 && i + 2 < data.length) {
+              microsecondsPerQuarter = (data[i] << 16) | (data[i+1] << 8) | data[i+2];
+            }
+            
+            i += len;
+          }
+          // SysEx
+          else if (status === 0xF0 || status === 0xF7) {
+            // Skip to end of SysEx
+            while (i < data.length && data[i] !== 0xF7) i++;
+            if (i < data.length) i++;
+          }
+          else {
+            // Unknown status, try to continue
+            i++;
+          }
+        }
+      } else {
+        i++;
+      }
+    }
+    
+    console.log('Found', notes.length, 'notes');
+    
+    // If still no notes found, try a different approach - just scan for 0x90 patterns
+    if (notes.length === 0) {
+      console.log('Trying alternate parsing method...');
+      for (let j = 0; j < data.length - 2; j++) {
+        if ((data[j] & 0xF0) === 0x90 && data[j + 2] > 0) {
+          notes.push({
+            note: data[j + 1],
+            time: notes.length * 100, // Fake timing
+            velocity: data[j + 2] / 127,
+            channel: data[j] & 0x0F
+          });
+        }
+      }
+      console.log('Alternate method found', notes.length, 'notes');
+    }
+    
+    return notes.sort((a, b) => a.time - b.time);
+  };
+
+  // Handle MIDI file loading
+  const handleMidiFileLoad = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    try {
+      console.log('Loading MIDI file:', file.name);
+      const notes = await parseMidiFile(file);
+      
+      console.log('Parsed notes:', notes.length, 'notes');
+      if (notes.length > 0) {
+        console.log('First few notes:', notes.slice(0, 5));
+      }
+      
+      if (notes.length === 0) {
+        console.warn('No notes found in MIDI file');
+        alert('No notes found in the MIDI file. Please try a different file.');
+        return;
+      }
+      
+      // Stop any current playback
+      stopSong();
+      
+      // Clean up any existing MIDI file playback
+      if (window.midiFileCleanup) {
+        window.midiFileCleanup.forEach(cleanup => cleanup());
+        window.midiFileCleanup = [];
+      }
+      
+      // Play the MIDI file after a short delay to ensure handlers are ready
+      setTimeout(() => {
+        playMidiFile(notes);
+      }, 100);
+      
+    } catch (error) {
+      console.error('Error loading MIDI file:', error);
+      alert('Error loading MIDI file: ' + error.message);
+    }
+    
+    // Reset input
+    event.target.value = '';
+  };
+
+  // Play loaded MIDI file
+  const playMidiFile = (notes) => {
+    if (notes.length === 0) return;
+    
+    console.log('Starting MIDI playback with', notes.length, 'notes');
+    
+    let noteIndex = 0;
+    const startTime = Date.now();
+    let timeoutIds = [];
+    
+    const playNextNote = () => {
+      if (noteIndex >= notes.length) {
+        console.log('MIDI playback completed, looping...');
+        // Loop the MIDI file
+        noteIndex = 0;
+        playMidiFile(notes);
+        return;
+      }
+      
+      const note = notes[noteIndex];
+      const currentTime = Date.now() - startTime;
+      const delay = Math.max(0, note.time - currentTime);
+      
+
+      
+      const timeoutId = setTimeout(() => {
+        // Map MIDI note to piano key
+        const keyMapping = getMidiKeyMapping(note.note);
+        
+        if (keyMapping) {
+          const pianoKey = PIANO_KEYS.find(k => k.note === keyMapping);
+          if (pianoKey) {
+            // Simulate key press
+            if (handleKeyPressRef.current) {
+              handleKeyPressRef.current(pianoKey);
+              
+              // Release after a short duration
+              const releaseDuration = 100 + note.velocity * 200;
+              setTimeout(() => {
+                if (handleKeyReleaseRef.current) {
+                  handleKeyReleaseRef.current(pianoKey);
+                }
+              }, releaseDuration);
+            }
+          }
+        }
+        
+        noteIndex++;
+        playNextNote();
+      }, delay);
+      
+      timeoutIds.push(timeoutId);
+    };
+    
+    // Store cleanup function
+    const cleanup = () => {
+      timeoutIds.forEach(id => clearTimeout(id));
+      timeoutIds = [];
+    };
+    
+    // Add to active notes for cleanup on stop
+    if (!window.midiFileCleanup) {
+      window.midiFileCleanup = [];
+    }
+    window.midiFileCleanup.push(cleanup);
+    
+    playNextNote();
+  };
+
   // MIDI note number to piano key mapping
   // Map all MIDI notes to our available piano keys using modulo
   const getMidiKeyMapping = (noteNumber) => {
+    // MIDI note 60 = C4 (middle C)
     const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const noteName = noteNames[noteNumber % 12];
     
-    // Map to our available octaves (4 and 5)
-    // MIDI notes 48-71 map to octave 4, 72+ map to octave 5
-    let octave;
-    if (noteNumber < 72) {
-      octave = 4;
-    } else {
-      octave = 5;
+    // Calculate the actual octave and note
+    const octave = Math.floor(noteNumber / 12) - 1;
+    const noteIndex = noteNumber % 12;
+    const noteName = noteNames[noteIndex];
+    const actualNote = `${noteName}${octave}`;
+    
+    // Check if this exact note exists in our piano
+    if (PIANO_KEYS.find(k => k.note === actualNote)) {
+      return actualNote;
     }
     
-    const mappedNote = `${noteName}${octave}`;
+    // Our piano range is C4 to E5 (MIDI 60-76)
+    // If the note is outside this range, transpose it to fit
+    let transposedNote = noteNumber;
     
-    // Check if this note exists in our piano
+    // Transpose down to our range if too high
+    while (transposedNote > 76) {
+      transposedNote -= 12;
+    }
+    
+    // Transpose up to our range if too low
+    while (transposedNote < 60) {
+      transposedNote += 12;
+    }
+    
+    // Now map the transposed note
+    const transOctave = Math.floor(transposedNote / 12) - 1;
+    const transNoteIndex = transposedNote % 12;
+    const transNoteName = noteNames[transNoteIndex];
+    const mappedNote = `${transNoteName}${transOctave}`;
+    
+    // Final check
     if (PIANO_KEYS.find(k => k.note === mappedNote)) {
       return mappedNote;
-    }
-    
-    // If not (like E5+), wrap back to octave 4
-    if (octave === 5 && !PIANO_KEYS.find(k => k.note === mappedNote)) {
-      return `${noteName}4`;
     }
     
     return null;
@@ -443,6 +716,20 @@ function MusicolourApp() {
         setShowAutoplayer(prev => !prev);
         return;
       }
+
+      // Replay tutorial with Shift + M
+      if (event.code === 'KeyM' && event.shiftKey) {
+        setShowTutorial(true);
+        playSong(0, false); // Play demo without looping
+        return;
+      }
+
+      // Open MIDI file with Shift + P
+      if (event.code === 'KeyP' && event.shiftKey) {
+        event.preventDefault();
+        fileInputRef.current?.click();
+        return;
+      }
       
       const key = PIANO_KEYS.find(k => k.keyCode === event.code);
       if (key && !pressedKeys.has(key.note)) {
@@ -475,24 +762,24 @@ function MusicolourApp() {
     // Process note through musicality engine
     const musicalityResult = musicalityEngineRef.current.processNote(noteIndex, timestamp, velocity);
     
-    console.log('Update system excitement:', {
-      noteIndex,
-      musicalityResult,
-      currentExcitement: systemState.excitement,
-      timestamp
-    });
+    // console.log('Update system excitement:', {
+    //   noteIndex,
+    //   musicalityResult,
+    //   currentExcitement: systemState.excitement,
+    //   timestamp
+    // });
     
     setSystemState(prev => {
       // Add excitement based on musicality
       const excitementIncrease = musicalityResult.excitement;
       const newExcitement = Math.max(0, Math.min(1, prev.excitement + excitementIncrease));
       
-      console.log('State update:', {
-        prevExcitement: prev.excitement,
-        excitementIncrease,
-        newExcitement,
-        musicalityScore: musicalityResult.score
-      });
+      // console.log('State update:', {
+      //   prevExcitement: prev.excitement,
+      //   excitementIncrease,
+      //   newExcitement,
+      //   musicalityScore: musicalityResult.score
+      // });
       
       return {
         ...prev,
@@ -554,11 +841,11 @@ function MusicolourApp() {
         numSplats = 2;
       }
       
-      console.log('Triggering splats:', {
-        excitement: currentState.excitement,
-        numSplats,
-        musicalityScore: currentState.musicalityScore
-      });
+      // console.log('Triggering splats:', {
+      //   excitement: currentState.excitement,
+      //   numSplats,
+      //   musicalityScore: currentState.musicalityScore
+      // });
       
       // Trigger multiple splats
       for (let i = 0; i < numSplats; i++) {
@@ -610,7 +897,7 @@ function MusicolourApp() {
             // Set up MIDI event listeners
             input.onmidimessage = (event) => {
               const [status, noteNumber, velocity] = event.data;
-              const channel = status & 0x0F;
+              // const channel = status & 0x0F; // Unused but might be needed for channel-specific logic
               const command = status & 0xF0;
               
               // Note on
@@ -718,11 +1005,29 @@ function MusicolourApp() {
   // ---------------- AUTOPLAYER HOOK ----------------
   // Reuse existing handler refs declared later in the file
 
-  const { autoPlaying, playSong, stopSong } = useAutoplayer(
+    const { autoPlaying, playSong, stopSong } = useAutoplayer(
     handleKeyPressRef,
     handleKeyReleaseRef,
     PIANO_KEYS
   );
+  
+  // Store playSong in a ref to avoid dependency issues
+  const playSongRef = useRef(playSong);
+  useEffect(() => {
+    playSongRef.current = playSong;
+  }, [playSong]);
+
+  // Show tutorial on load (only once)
+  useEffect(() => {
+    setShowTutorial(true);
+    setShowKeyboard(true); // Show keyboard during tutorial
+    // Start demo song without looping after a short delay
+    const timer = setTimeout(() => {
+      playSongRef.current(0, false); // Play demo song once, no loop
+    }, 2000); // Wait 2 seconds before starting the demo
+    
+    return () => clearTimeout(timer);
+  }, []); // Empty dependency array - run only once on mount
 
   // Clean up any scheduled timeouts on unmount
   useEffect(() => {
@@ -731,17 +1036,18 @@ function MusicolourApp() {
     };
   }, [stopSong]);
 
-  const getMoodData = () => {
-    const excitement = systemState.excitement;
-    
-    if (excitement > 0.7) {
-      return { color: getInterpolatedColor(excitement), mood: 'excited' };
-    } else if (excitement < 0.2) {
-      return { color: getInterpolatedColor(excitement), mood: 'bored' };
-    } else {
-      return { color: getInterpolatedColor(excitement), mood: 'neutral' };
-    }
-  };
+  // Unused function - might be useful for future mood visualization features
+  // const getMoodData = () => {
+  //   const excitement = systemState.excitement;
+  //   
+  //   if (excitement > 0.7) {
+  //     return { color: getInterpolatedColor(excitement), mood: 'excited' };
+  //   } else if (excitement < 0.2) {
+  //     return { color: getInterpolatedColor(excitement), mood: 'bored' };
+  //   } else {
+  //     return { color: getInterpolatedColor(excitement), mood: 'neutral' };
+  //   }
+  // };
 
   // Handle hover for show button
   const handleShowButtonHover = useCallback(() => {
@@ -895,8 +1201,8 @@ function MusicolourApp() {
 
       {/* Parameters Panel */}
       {showParams && (
-        <div className="fixed right-4 top-4 bg-gray-800 bg-opacity-90 text-white p-4 rounded-lg z-40 text-xs font-mono w-64 max-h-[90vh] overflow-y-auto">
-          <h3 className="font-bold mb-3 text-sm">Model Parameters</h3>
+        <div className="fixed right-4 top-4 bg-gray-800 bg-opacity-90 text-white p-4 pb-2 rounded-lg z-40 text-xs font-mono w-64 max-h-[90vh] overflow-y-auto overflow-x-clip">
+          <h3 className="font-bold mb-3 text-sm mt-2">Model Parameters</h3>
           {Object.entries(paramsState).map(([key, val]) => {
             const sliderProps = {
               HISTORY: { min: 8, max: 64, step: 1 },
@@ -910,12 +1216,49 @@ function MusicolourApp() {
 
             if (!sliderProps) return null;
 
+            // Human-readable parameter names
+            const readableNames = {
+              HISTORY: 'Memory Length',
+              IOI_WIN: 'Note Timing Window',
+              VEL_WIN: 'Velocity Window',
+              CHORD_WINDOW: 'Chord Detection Time',
+              EMA_ALPHA: 'Smoothing Factor',
+              BOOST_POS: 'Excitement Boost',
+              BOOST_NEG: 'Decay Rate'
+            };
+
+            // Tooltips explaining each parameter
+            const tooltips = {
+              HISTORY: 'How many notes the system remembers',
+              IOI_WIN: 'Time window for rhythm detection',
+              VEL_WIN: 'Sensitivity to volume changes',
+              CHORD_WINDOW: 'Time to detect chords',
+              EMA_ALPHA: 'How quickly system adapts (lower=slower)',
+              BOOST_POS: 'How much excitement increases',
+              BOOST_NEG: 'How fast excitement fades'
+            };
+
             return (
-              <div key={key} className="mb-3">
-                <label className="flex justify-between items-center mb-1">
-                  <span>{key}</span>
+              <div key={key} className="mb-4 relative">
+                <label className="flex justify-between items-center mb-1 group">
+                  <span className="cursor-help flex items-center gap-1 relative group/title">
+                    {readableNames[key] || key}
+                    <span className="text-gray-500 text-xs">ⓘ</span>
+                    {/* Custom tooltip */}
+                    <div className="absolute left-0 bottom-full mb-1 opacity-0 group-hover/title:opacity-100 transition-opacity duration-200 z-50 pointer-events-none">
+                      <div className="bg-black text-gray-200 text-xs rounded px-3 py-2 shadow-xl border border-gray-600 w-56 whitespace-normal">
+                        {tooltips[key]}
+                        <div className="absolute top-full left-4 -mt-1 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-black"></div>
+                      </div>
+                    </div>
+                  </span>
                   <span className="ml-2 text-right">
-                    {typeof val === 'number' ? val.toFixed(2) : val}
+                    {(() => {
+                      if (key === 'CHORD_WINDOW') return `${val}ms`;
+                      if (key === 'HISTORY') return `${val} notes`;
+                      if (typeof val === 'number') return val.toFixed(2);
+                      return val;
+                    })()}
                   </span>
                 </label>
                 <input
@@ -947,6 +1290,30 @@ function MusicolourApp() {
         playSong={playSong}
         stopSong={stopSong}
       />
+
+      {/* Tutorial Cards */}
+      {showTutorial && (
+        <TutorialCards 
+          key="tutorial-cards"
+          onComplete={() => {
+            setShowTutorial(false);
+            setShowKeyboard(false); // Collapse keyboard after tutorial
+          }}
+          onSkip={() => {
+            setShowTutorial(false);
+            setShowKeyboard(false); // Collapse keyboard when skipping
+            stopSong(); // Stop the demo song
+            // Clean up any MIDI file playback
+            if (window.midiFileCleanup) {
+              window.midiFileCleanup.forEach(cleanup => cleanup());
+              window.midiFileCleanup = [];
+            }
+          }}
+        />
+      )}
+
+      {/* Info Icon */}
+      {!showTutorial && <InfoIcon showParams={showParams} showDebug={showDebug} />}
 
       {/* Fluid Canvas */}
       <div className="absolute inset-0" style={{ overflow: 'hidden' }}>
@@ -1018,6 +1385,15 @@ function MusicolourApp() {
           </button>
         </div>
       )}
+
+      {/* Hidden file input for MIDI files */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".mid,.midi"
+        onChange={handleMidiFileLoad}
+        style={{ display: 'none' }}
+      />
     </div>
   );
 }

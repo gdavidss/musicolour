@@ -57,7 +57,7 @@ export const MODEL_PARAMS = {
   VEL_WIN: 16,          // velocities analysed
   CHORD_WINDOW: 250,    // ms to collect simultaneous notes
   EMA_ALPHA: 0.1        // speed of “boredom baseline”
-  ,BOOST_POS: 0.05      // excitement gain when surprising/creative
+  ,BOOST_POS: 0.15      // excitement gain when surprising/creative
   ,BOOST_NEG: 0.02      // boredom decay when stagnant
 };
 
