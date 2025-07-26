@@ -10,8 +10,9 @@ import { InfoIcon } from './InfoIcon.jsx';
 // Initialize Tone.js
 Tone.start();
 
-// Piano key data
-const PIANO_KEYS = [
+// Piano key data (initially populated with on-screen keys – additional keys will be
+// added dynamically when unseen MIDI notes are received)
+let PIANO_KEYS = [
   // Octave 4
   { note: 'C4', type: 'white', keyCode: 'KeyQ', color: '#ff6b6b' },
   { note: 'C#4', type: 'black', keyCode: 'Digit2', color: '#4ecdc4' },
@@ -615,49 +616,29 @@ function MusicolourApp() {
     playNextNote();
   };
 
-  // MIDI note number to piano key mapping
-  // Map all MIDI notes to our available piano keys using modulo
+  // MIDI note number → note-name mapping with dynamic key creation.
+  // This now supports the full 0–127 MIDI range instead of wrapping to one octave.
   const getMidiKeyMapping = (noteNumber) => {
-    // MIDI note 60 = C4 (middle C)
-    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    
-    // Calculate the actual octave and note
+    const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+    // Convert to scientific pitch notation (e.g. 60 → C4)
     const octave = Math.floor(noteNumber / 12) - 1;
     const noteIndex = noteNumber % 12;
-    const noteName = noteNames[noteIndex];
-    const actualNote = `${noteName}${octave}`;
-    
-    // Check if this exact note exists in our piano
-    if (PIANO_KEYS.find(k => k.note === actualNote)) {
-      return actualNote;
+    const noteName = NOTE_NAMES[noteIndex];
+    const fullNote = `${noteName}${octave}`;
+
+    // Ensure we have a corresponding key object – create it lazily if missing
+    if (!PIANO_KEYS.find(k => k.note === fullNote)) {
+      const isBlack = noteName.includes('#');
+      PIANO_KEYS.push({
+        note: fullNote,
+        type: isBlack ? 'black' : 'white',
+        keyCode: '',          // not mapped to computer keyboard
+        color: isBlack ? '#444' : '#ccc' // neutral placeholder colours
+      });
     }
-    
-    // Our piano range is C4 to E5 (MIDI 60-76)
-    // If the note is outside this range, transpose it to fit
-    let transposedNote = noteNumber;
-    
-    // Transpose down to our range if too high
-    while (transposedNote > 76) {
-      transposedNote -= 12;
-    }
-    
-    // Transpose up to our range if too low
-    while (transposedNote < 60) {
-      transposedNote += 12;
-    }
-    
-    // Now map the transposed note
-    const transOctave = Math.floor(transposedNote / 12) - 1;
-    const transNoteIndex = transposedNote % 12;
-    const transNoteName = noteNames[transNoteIndex];
-    const mappedNote = `${transNoteName}${transOctave}`;
-    
-    // Final check
-    if (PIANO_KEYS.find(k => k.note === mappedNote)) {
-      return mappedNote;
-    }
-    
-    return null;
+
+    return fullNote;
   };
 
   // Initialize piano with better sound
