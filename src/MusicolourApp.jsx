@@ -10,64 +10,76 @@ import { InfoIcon } from './InfoIcon.jsx';
 // Initialize Tone.js
 Tone.start();
 
-// Piano key data (initially populated with on-screen keys – additional keys will be
-// added dynamically when unseen MIDI notes are received)
-let PIANO_KEYS = [
-  // Octave 4
-  { note: 'C4', type: 'white', keyCode: 'KeyQ', color: '#ff6b6b' },
-  { note: 'C#4', type: 'black', keyCode: 'Digit2', color: '#4ecdc4' },
-  { note: 'D4', type: 'white', keyCode: 'KeyW', color: '#45b7d1' },
-  { note: 'D#4', type: 'black', keyCode: 'Digit3', color: '#96ceb4' },
-  { note: 'E4', type: 'white', keyCode: 'KeyE', color: '#feca57' },
-  { note: 'F4', type: 'white', keyCode: 'KeyR', color: '#ff9ff3' },
-  { note: 'F#4', type: 'black', keyCode: 'Digit5', color: '#54a0ff' },
-  { note: 'G4', type: 'white', keyCode: 'KeyT', color: '#5f27cd' },
-  { note: 'G#4', type: 'black', keyCode: 'Digit6', color: '#00d2d3' },
-  { note: 'A4', type: 'white', keyCode: 'KeyY', color: '#ff6348' },
-  { note: 'A#4', type: 'black', keyCode: 'Digit7', color: '#ff9ff3' },
-  { note: 'B4', type: 'white', keyCode: 'KeyU', color: '#7bed9f' },
-  // Octave 5
-  { note: 'C5', type: 'white', keyCode: 'KeyI', color: '#70a1ff' },
-  { note: 'C#5', type: 'black', keyCode: 'Digit9', color: '#dda0dd' },
-  { note: 'D5', type: 'white', keyCode: 'KeyO', color: '#ff7675' },
-  { note: 'D#5', type: 'black', keyCode: 'Digit0', color: '#fdcb6e' },
-  { note: 'E5', type: 'white', keyCode: 'KeyP', color: '#6c5ce7' }
-];
+// Piano key data – generate a fixed 61-key range (C2-C7).
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+const START_MIDI = 36; // C2
+const KEY_COUNT = 61;   // Up to C7 inclusive
+
+const QWERTY_MAPPING = {
+  C4: 'KeyQ', 'C#4': 'Digit2', D4: 'KeyW', 'D#4': 'Digit3', E4: 'KeyE',
+  F4: 'KeyR', 'F#4': 'Digit5', G4: 'KeyT', 'G#4': 'Digit6', A4: 'KeyY',
+  'A#4': 'Digit7', B4: 'KeyU', C5: 'KeyI', 'C#5': 'Digit9', D5: 'KeyO',
+  'D#5': 'Digit0', E5: 'KeyP'
+};
+
+const generatePianoKeys = () => {
+  const keys = [];
+  for (let i = 0; i < KEY_COUNT; i++) {
+    const midi = START_MIDI + i;
+    const octave = Math.floor(midi / 12) - 1;
+    const name = NOTE_NAMES[midi % 12];
+    const note = `${name}${octave}`;
+    const isBlack = name.includes('#');
+    keys.push({
+      note,
+      type: isBlack ? 'black' : 'white',
+      keyCode: QWERTY_MAPPING[note] || '',
+      color: isBlack ? '#444' : '#ccc'
+    });
+  }
+  return keys;
+};
+
+const PIANO_KEYS = generatePianoKeys();
 
 // Piano Component
 function PianoKey({ keyData, isPressed, onPress, onRelease }) {
   const isBlack = keyData.type === 'black';
-  
+
+  // Compact dimensions (px)
+  const WHITE_KEY_WIDTH = 24;
+  const BLACK_KEY_WIDTH = 14;
+  const WHITE_KEY_HEIGHT = 140;
+  const BLACK_KEY_HEIGHT = 90;
+
   return (
     <div
-      className={`
-        piano-key cursor-pointer transition-all duration-75 select-none relative
-        ${isBlack 
-          ? 'bg-gray-900 text-white h-24 w-8 z-20' 
-          : 'bg-white text-gray-800 h-36 w-11 border border-gray-300'
-        }
-        ${isPressed ? (isBlack ? 'bg-gray-700' : 'bg-gray-100') : ''}
-        hover:${isBlack ? 'bg-gray-700' : 'bg-gray-50'}
-        flex flex-col justify-end items-center pb-2
-        shadow-lg hover:shadow-xl
-      `}
+      className={`piano-key cursor-pointer transition-all duration-75 select-none relative flex flex-col justify-end items-center pb-1 shadow-md hover:shadow-lg ${isBlack ? 'z-20' : ''}`}
       onMouseDown={onPress}
       onMouseUp={onRelease}
       onMouseLeave={onRelease}
       style={{
+        width: isBlack ? `${BLACK_KEY_WIDTH}px` : `${WHITE_KEY_WIDTH}px`,
+        height: isBlack ? `${BLACK_KEY_HEIGHT}px` : `${WHITE_KEY_HEIGHT}px`,
+        backgroundColor: isBlack ? (isPressed ? '#333' : '#111') : (isPressed ? '#eee' : '#fff'),
+        color: isBlack ? '#fff' : '#000',
+        border: isBlack ? '1px solid #000' : '1px solid #ccc',
         borderBottomColor: keyData.color,
-        borderBottomWidth: isPressed ? '6px' : '3px',
-        boxShadow: isBlack 
-          ? '0 4px 12px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)'
-          : '0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.8)'
+        borderBottomWidth: isPressed ? '4px' : '2px',
+        boxShadow: isBlack
+          ? '0 2px 6px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)'
+          : '0 2px 6px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.8)'
       }}
     >
-      <div className="text-xs font-mono opacity-70 font-black">
+      <div className="text-[8px] font-mono opacity-70 font-bold select-none">
         {keyData.note}
       </div>
-      <div className="text-xs opacity-50 font-bold">
-        {keyData.keyCode.replace('Key', '').replace('Digit', '')}
-      </div>
+      {keyData.keyCode && (
+        <div className="text-[8px] opacity-50 font-bold select-none">
+          {keyData.keyCode.replace('Key', '').replace('Digit', '')}
+        </div>
+      )}
     </div>
   );
 }
@@ -213,7 +225,7 @@ function PowerBar({ excitement = 0 }) {
   }
 
   return (
-    <div className="fixed left-0 top-0 h-full z-20" style={{ width: '8px' }}>
+    <div className="fixed right-0 top-0 h-full z-20" style={{ width: '8px' }}>
       {/* Minimal excitement bar */}
       <div className="relative w-full h-full bg-black bg-opacity-30">
         {/* Negative space indicator */}
@@ -222,7 +234,8 @@ function PowerBar({ excitement = 0 }) {
           style={{
             height: `${100 - fillHeight}%`,
             backgroundColor: backgroundTint,
-            transition: 'background-color 0.5s ease-out'
+            transition: 'background-color 0.5s ease-out',
+            borderRadius: '999px'
           }}
         />
         {/* Main fill */}
@@ -230,7 +243,8 @@ function PowerBar({ excitement = 0 }) {
           className="absolute bottom-0 left-0 right-0"
           style={{
             height: `${fillHeight}%`,
-            backgroundColor: 'white'
+            backgroundColor: 'white',
+            borderRadius: '999px'
           }}
         />
       </div>
@@ -239,13 +253,19 @@ function PowerBar({ excitement = 0 }) {
 }
 
 function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
+  const WHITE_KEY_WIDTH = 24;
+  const BLACK_KEY_WIDTH = 14;
+
+  const whiteKeys = PIANO_KEYS.filter(k => k.type === 'white');
+  const blackKeys = PIANO_KEYS.filter(k => k.type === 'black');
+
   return (
     <div className="piano-container flex justify-center items-end bg-transparent overflow-visible">
       <div className="relative inline-flex" style={{
         transform: 'perspective(800px) rotateX(5deg)',
         transformStyle: 'preserve-3d'
       }}>
-        {PIANO_KEYS.filter(k => k.type === 'white').map((key) => (
+        {whiteKeys.map((key) => (
           <PianoKey
             key={key.note}
             keyData={key}
@@ -254,34 +274,18 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
             onRelease={() => onKeyRelease(key)}
           />
         ))}
-        <div className="absolute top-0 left-0 right-0" style={{ pointerEvents: 'none' }}>
-          {PIANO_KEYS.filter(k => k.type === 'black').map((key) => {
-            // Map each black key to the white key it appears after
-            const blackKeyAfterWhite = {
-              'C#4': 'C4',
-              'D#4': 'D4',
-              'F#4': 'F4',
-              'G#4': 'G4',
-              'A#4': 'A4',
-              'C#5': 'C5',
-              'D#5': 'D5',
-            };
-            
-            const whiteKeys = PIANO_KEYS.filter(k => k.type === 'white');
-            const afterWhiteKey = blackKeyAfterWhite[key.note];
-            const whiteKeyIndex = whiteKeys.findIndex(wk => wk.note === afterWhiteKey);
-            
-            // Position black key between white keys
-            // Black keys are 32px wide (w-8 = 2rem = 32px), white keys are 44px wide (w-11)
-            const offset = (whiteKeyIndex + 1) * 44 - 16; // Position at right edge of white key minus half black key width
-            
+        {/* Render black keys using absolute positioning */}
+        <div className="absolute top-0 left-0" style={{ pointerEvents: 'none' }}>
+          {blackKeys.map((key) => {
+            // Count white keys that come before this black key
+            const indexInAll = PIANO_KEYS.findIndex(k => k.note === key.note);
+            const whiteBefore = PIANO_KEYS.slice(0, indexInAll).filter(k => k.type === 'white').length;
+            const offset = whiteBefore * WHITE_KEY_WIDTH - (BLACK_KEY_WIDTH / 2);
+
             return (
               <div
                 key={key.note}
-                style={{ 
-                  left: `${offset}px`, 
-                  pointerEvents: 'auto'
-                }}
+                style={{ left: `${offset}px`, pointerEvents: 'auto' }}
                 className="absolute top-0 z-20"
               >
                 <PianoKey
@@ -362,6 +366,13 @@ function MusicolourApp() {
   }, [systemState]);
 
   const pianoRef = useRef(null);
+
+  /* ---------------- MIDI Sustain Pedal Support ---------------- */
+  // Whether the pedal is currently held (CC 64 >= 64)
+  const sustainActiveRef = useRef(false);
+  // Notes that have received a Note Off while the pedal was held. They will be
+  // released en-masse once the pedal is lifted.
+  const sustainedNotesRef = useRef(new Set());
 
   // Simpler MIDI file parser focused on extracting notes
   const parseMidiFile = async (file) => {
@@ -627,23 +638,29 @@ function MusicolourApp() {
     const noteName = NOTE_NAMES[noteIndex];
     const fullNote = `${noteName}${octave}`;
 
-    // Ensure we have a corresponding key object – create it lazily if missing
-    if (!PIANO_KEYS.find(k => k.note === fullNote)) {
-      const isBlack = noteName.includes('#');
-      PIANO_KEYS.push({
-        note: fullNote,
-        type: isBlack ? 'black' : 'white',
-        keyCode: '',          // not mapped to computer keyboard
-        color: isBlack ? '#444' : '#ccc' // neutral placeholder colours
-      });
-    }
-
+    // No dynamic key addition – onscreen keyboard is fixed to 61 keys.
     return fullNote;
   };
 
-  // Initialize piano with better sound
+  // Initialize piano: start with a 16-voice fallback synth, then swap in the
+  // higher-quality sampler once its samples finish loading. This avoids the
+  // early "loaded === false" check that previously forced the app to stay on
+  // the low-polyphony fallback and lose notes when playing chords.
   useEffect(() => {
-    pianoRef.current = new Tone.Sampler({
+    // 1) Create a 16-voice fallback synth so users can play immediately.
+    const fallbackSynth = new Tone.PolySynth(Tone.Synth, {
+      maxPolyphony: 16,
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.02, decay: 0.4, sustain: 0.4, release: 1 }
+    }).toDestination();
+    fallbackSynth.volume.value = -16;
+
+    // Set as the current instrument.
+    pianoRef.current = fallbackSynth;
+
+    // 2) Begin loading the multi-sample piano. When ready, swap it in and
+    // dispose the fallback to free resources.
+    const sampler = new Tone.Sampler({
       urls: {
         C4: "C4.mp3",
         "D#4": "Ds4.mp3",
@@ -652,22 +669,25 @@ function MusicolourApp() {
       },
       release: 1,
       baseUrl: "https://tonejs.github.io/audio/salamander/",
+      onload: () => {
+        sampler.volume.value = -16;
+
+        // Swap instruments
+        if (pianoRef.current) {
+          pianoRef.current.dispose();
+        }
+        pianoRef.current = sampler;
+      }
     }).toDestination();
 
-    // Fallback to synthetic piano if samples don't load
-    const synthPiano = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 1 }
-    }).toDestination();
-
-    if (!pianoRef.current.loaded) {
-      pianoRef.current = synthPiano;
-    }
-
+    // Clean-up: dispose whichever instrument is active on unmount.
     return () => {
       if (pianoRef.current) {
         pianoRef.current.dispose();
       }
+      // Ensure both are disposed in case the sampler never loaded.
+      fallbackSynth.dispose();
+      sampler.dispose();
     };
   }, []);
 
@@ -871,38 +891,63 @@ function MusicolourApp() {
           const midiAccess = await navigator.requestMIDIAccess();
           midiAccessRef.current = midiAccess;
           
-          // Get connected MIDI devices
-          const devices = [];
-          for (const input of midiAccess.inputs.values()) {
-            devices.push(input.name);
-            
-            // Set up MIDI event listeners
-            input.onmidimessage = (event) => {
-              const [status, noteNumber, velocity] = event.data;
-              // const channel = status & 0x0F; // Unused but might be needed for channel-specific logic
-              const command = status & 0xF0;
-              
-              // Note on
-              if (command === 0x90 && velocity > 0) {
-                const noteName = getMidiKeyMapping(noteNumber);
-                if (noteName) {
-                  const key = PIANO_KEYS.find(k => k.note === noteName);
-                  if (key && handleKeyPressRef.current) {
-                    handleKeyPressRef.current(key, velocity / 127); // Normalize velocity to 0-1 using latest handler
-                  }
+          // Helper that we can attach to any MIDIInput
+          const midiMessageHandler = (event) => {
+            const [status, data1, data2] = event.data; // data1: note or CC#, data2: velocity/value
+            const command = status & 0xF0;
+
+            // ---------------- NOTE ON ----------------
+            if (command === 0x90 && data2 > 0) {
+              const noteName = getMidiKeyMapping(data1);
+              if (noteName) {
+                // If this note was previously being sustained, remove it so we don't double-release later.
+                sustainedNotesRef.current.delete(noteName);
+
+                const key = PIANO_KEYS.find(k => k.note === noteName);
+                if (key && handleKeyPressRef.current) {
+                  handleKeyPressRef.current(key, data2 / 127); // velocity normalised 0-1
                 }
               }
-              // Note off (or note on with velocity 0)
-              else if (command === 0x80 || (command === 0x90 && velocity === 0)) {
-                const noteName = getMidiKeyMapping(noteNumber);
-                if (noteName) {
+            }
+            // ---------------- NOTE OFF ----------------
+            else if (command === 0x80 || (command === 0x90 && data2 === 0)) {
+              const noteName = getMidiKeyMapping(data1);
+              if (!noteName) return;
+
+              if (sustainActiveRef.current) {
+                // Defer release until pedal lifted
+                sustainedNotesRef.current.add(noteName);
+              } else {
+                const key = PIANO_KEYS.find(k => k.note === noteName);
+                if (key && handleKeyReleaseRef.current) {
+                  handleKeyReleaseRef.current(key);
+                }
+              }
+            }
+            // ---------------- SUSTAIN PEDAL (CC 64) ----------------
+            else if (command === 0xB0 && data1 === 64) {
+              const pedalDown = data2 >= 64;
+              if (pedalDown) {
+                sustainActiveRef.current = true;
+              } else {
+                sustainActiveRef.current = false;
+                // Release all deferred notes
+                sustainedNotesRef.current.forEach((noteName) => {
                   const key = PIANO_KEYS.find(k => k.note === noteName);
                   if (key && handleKeyReleaseRef.current) {
                     handleKeyReleaseRef.current(key);
                   }
-                }
+                });
+                sustainedNotesRef.current.clear();
               }
-            };
+            }
+          };
+
+          // Get connected MIDI devices
+          const devices = [];
+          for (const input of midiAccess.inputs.values()) {
+            devices.push(input.name);
+            input.onmidimessage = midiMessageHandler;
           }
           
           setMidiDevices(devices);
@@ -931,31 +976,7 @@ function MusicolourApp() {
             if (event.port.type === 'input' && event.port.state === 'connected') {
               const input = event.port;
               if (input) {
-                input.onmidimessage = (event) => {
-                  const [status, noteNumber, velocity] = event.data;
-                  const command = status & 0xF0;
-
-                  // Note on
-                  if (command === 0x90 && velocity > 0) {
-                    const noteName = getMidiKeyMapping(noteNumber);
-                    if (noteName) {
-                      const key = PIANO_KEYS.find(k => k.note === noteName);
-                      if (key && handleKeyPressRef.current) {
-                        handleKeyPressRef.current(key, velocity / 127);
-                      }
-                    }
-                  }
-                  // Note off
-                  else if (command === 0x80 || (command === 0x90 && velocity === 0)) {
-                    const noteName = getMidiKeyMapping(noteNumber);
-                    if (noteName) {
-                      const key = PIANO_KEYS.find(k => k.note === noteName);
-                      if (key && handleKeyReleaseRef.current) {
-                        handleKeyReleaseRef.current(key);
-                      }
-                    }
-                  }
-                };
+                input.onmidimessage = midiMessageHandler;
               }
             }
 
