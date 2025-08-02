@@ -44,14 +44,14 @@ const generatePianoKeys = () => {
 const PIANO_KEYS = generatePianoKeys();
 
 // Piano Component
-function PianoKey({ keyData, isPressed, onPress, onRelease }) {
+function PianoKey({ keyData, isPressed, onPress, onRelease, midiEnabled }) {
   const isBlack = keyData.type === 'black';
 
-  // Compact dimensions (px)
-  const WHITE_KEY_WIDTH = 24;
-  const BLACK_KEY_WIDTH = 14;
-  const WHITE_KEY_HEIGHT = 140;
-  const BLACK_KEY_HEIGHT = 90;
+  // Dimensions change based on whether MIDI is connected
+  const WHITE_KEY_WIDTH = midiEnabled ? 24 : 36;
+  const BLACK_KEY_WIDTH = midiEnabled ? 14 : 24;
+  const WHITE_KEY_HEIGHT = midiEnabled ? 140 : 180;
+  const BLACK_KEY_HEIGHT = midiEnabled ? 90 : 120;
 
   return (
     <div
@@ -72,11 +72,11 @@ function PianoKey({ keyData, isPressed, onPress, onRelease }) {
           : '0 2px 6px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.8)'
       }}
     >
-      <div className="text-[8px] font-mono opacity-70 font-bold select-none">
+      <div className={`${midiEnabled ? 'text-[8px]' : 'text-xs'} font-mono opacity-70 font-bold select-none`}>
         {keyData.note}
       </div>
       {keyData.keyCode && (
-        <div className="text-[8px] opacity-50 font-bold select-none">
+        <div className={`${midiEnabled ? 'text-[8px]' : 'text-[10px]'} opacity-50 font-bold select-none`}>
           {keyData.keyCode.replace('Key', '').replace('Digit', '')}
         </div>
       )}
@@ -225,7 +225,7 @@ function PowerBar({ excitement = 0 }) {
   }
 
   return (
-    <div className="fixed right-0 top-0 h-full z-20" style={{ width: '8px' }}>
+    <div className="fixed left-0 top-0 h-full z-20" style={{ width: '8px' }}>
       {/* Minimal excitement bar */}
       <div className="relative w-full h-full bg-black bg-opacity-30">
         {/* Negative space indicator */}
@@ -252,12 +252,16 @@ function PowerBar({ excitement = 0 }) {
   );
 }
 
-function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
-  const WHITE_KEY_WIDTH = 24;
-  const BLACK_KEY_WIDTH = 14;
+function Piano({ onKeyPress, onKeyRelease, pressedKeys, midiEnabled }) {
+  // Use larger dimensions when showing only QWERTY keys
+  const WHITE_KEY_WIDTH = midiEnabled ? 24 : 36;
+  const BLACK_KEY_WIDTH = midiEnabled ? 14 : 24;
 
-  const whiteKeys = PIANO_KEYS.filter(k => k.type === 'white');
-  const blackKeys = PIANO_KEYS.filter(k => k.type === 'black');
+  // If no MIDI is connected, show only keys with QWERTY mappings
+  const keysToShow = midiEnabled ? PIANO_KEYS : PIANO_KEYS.filter(k => k.keyCode !== '');
+  
+  const whiteKeys = keysToShow.filter(k => k.type === 'white');
+  const blackKeys = keysToShow.filter(k => k.type === 'black');
 
   return (
     <div className="piano-container flex justify-center items-end bg-transparent overflow-visible">
@@ -272,14 +276,15 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
             isPressed={pressedKeys.has(key.note)}
             onPress={() => onKeyPress(key)}
             onRelease={() => onKeyRelease(key)}
+            midiEnabled={midiEnabled}
           />
         ))}
         {/* Render black keys using absolute positioning */}
         <div className="absolute top-0 left-0" style={{ pointerEvents: 'none' }}>
           {blackKeys.map((key) => {
-            // Count white keys that come before this black key
-            const indexInAll = PIANO_KEYS.findIndex(k => k.note === key.note);
-            const whiteBefore = PIANO_KEYS.slice(0, indexInAll).filter(k => k.type === 'white').length;
+            // Count white keys that come before this black key in the filtered set
+            const indexInAll = keysToShow.findIndex(k => k.note === key.note);
+            const whiteBefore = keysToShow.slice(0, indexInAll).filter(k => k.type === 'white').length;
             const offset = whiteBefore * WHITE_KEY_WIDTH - (BLACK_KEY_WIDTH / 2);
 
             return (
@@ -293,6 +298,7 @@ function Piano({ onKeyPress, onKeyRelease, pressedKeys }) {
                   isPressed={pressedKeys.has(key.note)}
                   onPress={() => onKeyPress(key)}
                   onRelease={() => onKeyRelease(key)}
+                  midiEnabled={midiEnabled}
                 />
               </div>
             );
@@ -1357,6 +1363,7 @@ function MusicolourApp() {
             onKeyPress={handleKeyPress}
             onKeyRelease={handleKeyRelease}
             pressedKeys={pressedKeys}
+            midiEnabled={midiEnabled}
           />
         </div>
       </div>
