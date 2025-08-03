@@ -6,7 +6,7 @@ const CARDS = [
     content: (
       <div className="space-y-4">
         <p className="text-4xl font-light">Welcome to Musicolour</p>
-        <p className="text-xl text-gray-300">A demo is playing to show you how it works</p>
+        <p className="text-xl text-gray-300">Click anywhere to start the demo</p>
       </div>
     )
   },
@@ -103,12 +103,13 @@ const CARDS = [
 // Export shortcuts card for reuse
 export const SHORTCUTS_CARD = CARDS.find(card => card.id === 'shortcuts');
 
-export function TutorialCards({ onComplete, onSkip }) {
+export function TutorialCards({ onComplete, onSkip, onStart }) {
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
   const [isActive, setIsActive] = useState(true);
   const mountTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
+  const [hasStarted, setHasStarted] = useState(false);
 
   // Mark tutorial as seen in localStorage
   const markTutorialAsSeen = () => {
@@ -192,6 +193,12 @@ export function TutorialCards({ onComplete, onSkip }) {
         className={`fixed text-white transition-all duration-500 ${
           isVisible ? 'opacity-100 transform translate-y-0' : 'opacity-0 transform -translate-y-4'
         }`}
+        onClick={() => {
+          if (!hasStarted && currentCardIndex === 0 && onStart) {
+            setHasStarted(true);
+            onStart();
+          }
+        }}
         style={{ 
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
           zIndex: 99999,
@@ -201,7 +208,8 @@ export function TutorialCards({ onComplete, onSkip }) {
           padding: '48px',
           maxWidth: '800px',
           textAlign: 'center',
-          textShadow: '0 2px 20px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.9)'
+          textShadow: '0 2px 20px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.9)',
+          cursor: currentCardIndex === 0 && !hasStarted ? 'pointer' : 'default'
         }}
       >
       <div>

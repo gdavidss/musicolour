@@ -7,8 +7,7 @@ import { useAutoplayer, AutoplayerPanel } from './Autoplayer.jsx';
 import { TutorialCards } from './TutorialCards.jsx';
 import { InfoIcon } from './InfoIcon.jsx';
 
-// Initialize Tone.js
-Tone.start();
+// Initialize Tone.js - will be started on first user interaction
 
 // Piano key data – generate a fixed 61-key range (C2-C7).
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -315,6 +314,7 @@ function MusicolourApp() {
   const [pressedKeys, setPressedKeys] = useState(new Set());
   const fluidCanvasRef = useRef(null);
   const musicalityEngineRef = useRef(new MusicalityEngine());
+  const [audioStarted, setAudioStarted] = useState(false);
   
   // ---------------- TUNABLE PARAMETERS ----------------
   // Simplified parameters for musicality-based system
@@ -364,6 +364,15 @@ function MusicolourApp() {
       dynamicVariation: 0
     }
   });
+
+  // Start audio context on first user interaction
+  const startAudio = useCallback(async () => {
+    if (!audioStarted) {
+      await Tone.start();
+      setAudioStarted(true);
+      console.log('Audio context started');
+    }
+  }, [audioStarted]);
   
   // Use ref to access current state in callbacks
   const systemStateRef = useRef(systemState);
@@ -728,7 +737,7 @@ function MusicolourApp() {
       if (event.code === 'KeyM' && event.shiftKey) {
         setShowTutorial(true);
         setShowKeyboard(true); // Show keyboard during tutorial replay
-        playSong(0, false); // Play demo without looping
+        // Don't auto-play - wait for user interaction
         return;
       }
 
@@ -818,8 +827,11 @@ function MusicolourApp() {
     return () => clearInterval(decayInterval);
   }, []);
 
-  const handleKeyPress = useCallback((key, midiVelocity = null) => {
+  const handleKeyPress = useCallback(async (key, midiVelocity = null) => {
     if (pressedKeys.has(key.note)) return;
+    
+    // Start audio on first interaction
+    await startAudio();
     
     setPressedKeys(prev => new Set([...prev, key.note]));
     
@@ -862,7 +874,7 @@ function MusicolourApp() {
     } else {
       console.warn('fluidCanvasRef.current is null');
     }
-  }, [pressedKeys, updateSystemExcitement]);
+  }, [pressedKeys, updateSystemExcitement, startAudio]);
 
   const handleKeyRelease = useCallback((key) => {
     setPressedKeys(prev => {
@@ -1034,12 +1046,7 @@ function MusicolourApp() {
     if (!hasSeenTutorial) {
       setShowTutorial(true);
       setShowKeyboard(true); // Show keyboard during tutorial
-      // Start demo song without looping after a short delay
-      const timer = setTimeout(() => {
-        playSongRef.current(0, false); // Play demo song once, no loop
-      }, 2000); // Wait 2 seconds before starting the demo
-      
-      return () => clearTimeout(timer);
+      // Don't auto-play - wait for user interaction to start audio
     }
   }, []); // Empty dependency array - run only once on mount
 
@@ -1322,6 +1329,13 @@ function MusicolourApp() {
               window.midiFileCleanup.forEach(cleanup => cleanup());
               window.midiFileCleanup = [];
             }
+          }}
+          onStart={async () => {
+            await startAudio();
+            // Start demo song after audio context is ready
+            setTimeout(() => {
+              playSongRef.current(0, false); // Play demo song once, no loop
+            }, 100);
           }}
         />
       )}
