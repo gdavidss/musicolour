@@ -6,16 +6,19 @@ const CARDS = [
     content: (
       <div className="space-y-4">
         <p className="text-4xl font-light">Welcome to Musicolour</p>
-        <p className="text-xl text-gray-300">A demo is playing to show you how it works</p>
+        <p className="text-xl text-gray-300 animate-pulse">Click anywhere or press any key to start</p>
       </div>
     )
   },
   {
     id: 'behavior1',
     content: (
-      <p className="text-3xl font-light leading-relaxed">
-        The better you play,<br />the more colorful it gets
-      </p>
+      <div className="space-y-4">
+        <p className="text-3xl font-light leading-relaxed">
+          The better you play,<br />the more colorful it gets
+        </p>
+        <p className="text-lg text-gray-400">A demo is now playing</p>
+      </div>
     )
   },
   {
@@ -103,13 +106,12 @@ const CARDS = [
 // Export shortcuts card for reuse
 export const SHORTCUTS_CARD = CARDS.find(card => card.id === 'shortcuts');
 
-export function TutorialCards({ onComplete, onSkip, onStart }) {
+export function TutorialCards({ onComplete, onSkip }) {
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
   const [isActive, setIsActive] = useState(true);
   const mountTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
-  const [hasStarted, setHasStarted] = useState(false);
 
   // Mark tutorial as seen in localStorage
   const markTutorialAsSeen = () => {
@@ -119,14 +121,6 @@ export function TutorialCards({ onComplete, onSkip, onStart }) {
       console.error('Failed to save tutorial state:', e);
     }
   };
-
-  // Auto-start the demo when tutorial mounts
-  useEffect(() => {
-    if (!hasStarted && onStart && currentCardIndex === 0) {
-      setHasStarted(true);
-      onStart();
-    }
-  }, [hasStarted, onStart, currentCardIndex]);
 
   useEffect(() => {
     // Component initialization
@@ -201,12 +195,6 @@ export function TutorialCards({ onComplete, onSkip, onStart }) {
         className={`fixed text-white transition-all duration-500 ${
           isVisible ? 'opacity-100 transform translate-y-0' : 'opacity-0 transform -translate-y-4'
         }`}
-        onClick={() => {
-          if (!hasStarted && currentCardIndex === 0 && onStart) {
-            setHasStarted(true);
-            onStart();
-          }
-        }}
         style={{ 
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
           zIndex: 99999,

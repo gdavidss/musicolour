@@ -395,6 +395,12 @@ function MusicolourApp() {
     systemStateRef.current = systemState;
   }, [systemState]);
 
+  // Store startAudio in a ref to avoid effect dependencies
+  const startAudioRef = useRef(startAudio);
+  useEffect(() => {
+    startAudioRef.current = startAudio;
+  }, [startAudio]);
+
   // Attempt to start audio context once on mount
   useEffect(() => {
     // Try once after a short delay
@@ -1064,6 +1070,41 @@ function MusicolourApp() {
     if (!hasSeenTutorial) {
       setShowTutorial(true);
       setShowKeyboard(true); // Show keyboard during tutorial
+      
+      // Track if demo has started
+      let demoStarted = false;
+      
+      // Set up global interaction listener to start demo
+      const startDemoOnInteraction = async (e) => {
+        // Prevent triggering multiple times
+        if (demoStarted) return;
+        demoStarted = true;
+        
+        // Remove all listeners
+        document.removeEventListener('click', startDemoOnInteraction, true);
+        document.removeEventListener('touchstart', startDemoOnInteraction, true);
+        document.removeEventListener('keydown', startDemoOnInteraction, true);
+        
+        // Start audio and play demo
+        const audioReady = await startAudioRef.current();
+        if (audioReady && playSongRef.current) {
+          setTimeout(() => {
+            playSongRef.current(0, false); // Play demo once
+          }, 100);
+        }
+      };
+      
+      // Add listeners to entire document with capture phase
+      document.addEventListener('click', startDemoOnInteraction, true);
+      document.addEventListener('touchstart', startDemoOnInteraction, true);
+      document.addEventListener('keydown', startDemoOnInteraction, true);
+      
+      // Cleanup function
+      return () => {
+        document.removeEventListener('click', startDemoOnInteraction, true);
+        document.removeEventListener('touchstart', startDemoOnInteraction, true);
+        document.removeEventListener('keydown', startDemoOnInteraction, true);
+      };
     }
   }, []); // Empty dependency array - run only once on mount
 
@@ -1347,30 +1388,7 @@ function MusicolourApp() {
               window.midiFileCleanup = [];
             }
           }}
-          onStart={async () => {
-            console.log('Tutorial onStart called');
-            
-            // Try to start audio
-            const audioReady = await startAudio();
-            console.log('Audio ready:', audioReady);
-            
-            // Always try to play the demo after a delay
-            setTimeout(() => {
-              console.log('Starting demo playback');
-              console.log('Current refs:', {
-                playSongRef: !!playSongRef.current,
-                handleKeyPressRef: !!handleKeyPressRef.current,
-                handleKeyReleaseRef: !!handleKeyReleaseRef.current,
-                pianoRef: !!pianoRef.current,
-                audioStarted: audioStarted
-              });
-              
-              if (playSongRef.current) {
-                console.log('Calling playSong');
-                playSongRef.current(0, false); // Play demo song once, no loop
-              }
-            }, 500); // Give time for everything to initialize
-          }}
+
         />
       )}
 
