@@ -365,13 +365,34 @@ function MusicolourApp() {
     }
   });
 
-  // Start audio context on first user interaction
+  // Start audio context with various strategies
   const startAudio = useCallback(async () => {
     if (!audioStarted) {
-      await Tone.start();
-      setAudioStarted(true);
-      console.log('Audio context started');
+      try {
+        // Strategy 1: Try to resume existing context
+        if (Tone.context.state === 'suspended') {
+          await Tone.context.resume();
+        }
+        
+        // Strategy 2: Start Tone.js
+        await Tone.start();
+        
+        // Strategy 3: Play a silent buffer to activate audio
+        const buffer = Tone.context.createBuffer(1, 1, 22050);
+        const source = Tone.context.createBufferSource();
+        source.buffer = buffer;
+        source.connect(Tone.context.destination);
+        source.start();
+        
+        setAudioStarted(true);
+        console.log('Audio context started successfully');
+        return true;
+      } catch (error) {
+        console.log('Audio start failed, will retry on user interaction:', error);
+        return false;
+      }
     }
+    return true;
   }, [audioStarted]);
   
   // Use ref to access current state in callbacks
@@ -379,6 +400,57 @@ function MusicolourApp() {
   useEffect(() => {
     systemStateRef.current = systemState;
   }, [systemState]);
+
+  // Attempt to start audio context as early as possible
+  useEffect(() => {
+    // Try multiple times with delays
+    const attempts = [0, 100, 500, 1000, 2000];
+    attempts.forEach(delay => {
+      setTimeout(() => {
+        if (!audioStarted) {
+          startAudio();
+        }
+      }, delay);
+    });
+
+    // Try on visibility change
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !audioStarted) {
+        startAudio();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Try on window focus
+    const handleFocus = () => {
+      if (!audioStarted) {
+        startAudio();
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+
+    // Create and click an invisible button (sometimes works)
+    const button = document.createElement('button');
+    button.style.position = 'absolute';
+    button.style.left = '-9999px';
+    document.body.appendChild(button);
+    
+    setTimeout(() => {
+      try {
+        button.click();
+        startAudio();
+      } catch (e) {
+        // Ignore errors
+      } finally {
+        document.body.removeChild(button);
+      }
+    }, 50);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [startAudio, audioStarted]);
 
   const pianoRef = useRef(null);
 
@@ -1167,6 +1239,15 @@ function MusicolourApp() {
 
   return (
     <div className="w-full h-screen bg-black relative">
+      {/* Hidden iframe to help with autoplay */}
+      <iframe
+        src="about:blank"
+        style={{ position: 'absolute', width: 0, height: 0, border: 0 }}
+        onLoad={() => {
+          // Try to start audio when iframe loads
+          startAudio();
+        }}
+      />
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-semibold tracking-tight mb-2">MUSICOLOUR</h1>
@@ -1329,11 +1410,33 @@ function MusicolourApp() {
             }
           }}
           onStart={async () => {
-            await startAudio();
-            // Start demo song after audio context is ready
-            setTimeout(() => {
-              playSongRef.current(0, false); // Play demo song once, no loop
-            }, 100);
+            // Try to start audio multiple times
+            let audioReady = await startAudio();
+            
+            // If audio failed, set up a document-wide listener
+            if (!audioReady) {
+              const startOnInteraction = async () => {
+                audioReady = await startAudio();
+                if (audioReady) {
+                  document.removeEventListener('click', startOnInteraction);
+                  document.removeEventListener('touchstart', startOnInteraction);
+                  document.removeEventListener('keydown', startOnInteraction);
+                  // Start the demo after audio is ready
+                  playSongRef.current(0, false);
+                }
+              };
+              
+              document.addEventListener('click', startOnInteraction, { once: true });
+              document.addEventListener('touchstart', startOnInteraction, { once: true });
+              document.addEventListener('keydown', startOnInteraction, { once: true });
+            }
+            
+            // If audio is ready, start demo immediately
+            if (audioReady) {
+              setTimeout(() => {
+                playSongRef.current(0, false); // Play demo song once, no loop
+              }, 100);
+            }
           }}
         />
       )}
