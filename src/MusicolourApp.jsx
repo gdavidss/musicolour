@@ -369,24 +369,18 @@ function MusicolourApp() {
   const startAudio = useCallback(async () => {
     if (!audioStarted) {
       try {
-        // Strategy 1: Try to resume existing context
-        if (Tone.context.state === 'suspended') {
-          await Tone.context.resume();
-        }
-        
-        // Strategy 2: Start Tone.js
+        // Start Tone.js audio context
         await Tone.start();
         
-        // Strategy 3: Play a silent buffer to activate audio
-        const buffer = Tone.context.createBuffer(1, 1, 22050);
-        const source = Tone.context.createBufferSource();
-        source.buffer = buffer;
-        source.connect(Tone.context.destination);
-        source.start();
-        
-        setAudioStarted(true);
-        console.log('Audio context started successfully');
-        return true;
+        // Check if context is running
+        if (Tone.context.state === 'running') {
+          setAudioStarted(true);
+          console.log('Audio context started successfully');
+          return true;
+        } else {
+          console.log('Audio context state:', Tone.context.state);
+          return false;
+        }
       } catch (error) {
         console.log('Audio start failed, will retry on user interaction:', error);
         return false;
@@ -401,56 +395,15 @@ function MusicolourApp() {
     systemStateRef.current = systemState;
   }, [systemState]);
 
-  // Attempt to start audio context as early as possible
+  // Attempt to start audio context once on mount
   useEffect(() => {
-    // Try multiple times with delays
-    const attempts = [0, 100, 500, 1000, 2000];
-    attempts.forEach(delay => {
-      setTimeout(() => {
-        if (!audioStarted) {
-          startAudio();
-        }
-      }, delay);
-    });
-
-    // Try on visibility change
-    const handleVisibilityChange = () => {
-      if (!document.hidden && !audioStarted) {
-        startAudio();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    // Try on window focus
-    const handleFocus = () => {
+    // Try once after a short delay
+    setTimeout(() => {
       if (!audioStarted) {
         startAudio();
       }
-    };
-    window.addEventListener('focus', handleFocus);
-
-    // Create and click an invisible button (sometimes works)
-    const button = document.createElement('button');
-    button.style.position = 'absolute';
-    button.style.left = '-9999px';
-    document.body.appendChild(button);
-    
-    setTimeout(() => {
-      try {
-        button.click();
-        startAudio();
-      } catch (e) {
-        // Ignore errors
-      } finally {
-        document.body.removeChild(button);
-      }
-    }, 50);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [startAudio, audioStarted]);
+    }, 100);
+  }, []); // Empty deps - only run once
 
   const pianoRef = useRef(null);
 
@@ -734,7 +687,6 @@ function MusicolourApp() {
   // early "loaded === false" check that previously forced the app to stay on
   // the low-polyphony fallback and lose notes when playing chords.
   useEffect(() => {
-    console.log('Initializing piano...');
     // 1) Create a 16-voice fallback synth so users can play immediately.
     const fallbackSynth = new Tone.PolySynth(Tone.Synth, {
       maxPolyphony: 16,
@@ -745,7 +697,6 @@ function MusicolourApp() {
 
     // Set as the current instrument.
     pianoRef.current = fallbackSynth;
-    console.log('Piano initialized with fallback synth');
 
     // 2) Begin loading the multi-sample piano. When ready, swap it in and
     // dispose the fallback to free resources.
@@ -903,24 +854,15 @@ function MusicolourApp() {
   const handleKeyPress = useCallback((key, midiVelocity = null) => {
     if (pressedKeys.has(key.note)) return;
     
-    console.log(`handleKeyPress called for ${key.note}, audioStarted: ${audioStarted}, pianoRef: ${!!pianoRef.current}`);
-    
     // Start audio on first interaction (but don't block)
     if (!audioStarted) {
-      startAudio().catch(err => console.log('Audio start failed:', err));
+      startAudio();
     }
     
     setPressedKeys(prev => new Set([...prev, key.note]));
     
     if (pianoRef.current) {
-      console.log(`Triggering attack for ${key.note}`);
-      try {
-        pianoRef.current.triggerAttack(key.note);
-      } catch (err) {
-        console.error(`Error triggering attack for ${key.note}:`, err);
-      }
-    } else {
-      console.error('pianoRef.current is null when trying to play note:', key.note);
+      pianoRef.current.triggerAttack(key.note);
     }
 
     const noteIndex = PIANO_KEYS.findIndex(k => k.note === key.note);
@@ -930,7 +872,6 @@ function MusicolourApp() {
     updateSystemExcitement(noteIndex, velocity);
     
     // Trigger fluid splats based on excitement level
-    console.log('Checking fluid trigger, fluidCanvasRef:', !!fluidCanvasRef.current);
     if (fluidCanvasRef.current) {
       const currentState = systemStateRef.current;
       
@@ -946,19 +887,10 @@ function MusicolourApp() {
         numSplats = 2;
       }
       
-      console.log('Triggering splats:', {
-        excitement: currentState.excitement,
-        numSplats,
-        musicalityScore: currentState.musicalityScore
-      });
-      
       // Trigger multiple splats
       for (let i = 0; i < numSplats; i++) {
         fluidCanvasRef.current.triggerSplat(currentState.excitement);
       }
-      console.log(`Triggered ${numSplats} splats`);
-    } else {
-      console.warn('fluidCanvasRef.current is null');
     }
   }, [pressedKeys, updateSystemExcitement, startAudio, audioStarted]);
 
@@ -1254,15 +1186,6 @@ function MusicolourApp() {
 
   return (
     <div className="w-full h-screen bg-black relative">
-      {/* Hidden iframe to help with autoplay */}
-      <iframe
-        src="about:blank"
-        style={{ position: 'absolute', width: 0, height: 0, border: 0 }}
-        onLoad={() => {
-          // Try to start audio when iframe loads
-          startAudio();
-        }}
-      />
       {/* Header */}
       <div className="absolute top-6 left-20 z-10 text-white">
         <h1 className="text-3xl font-semibold tracking-tight mb-2">MUSICOLOUR</h1>
@@ -1427,52 +1350,26 @@ function MusicolourApp() {
           onStart={async () => {
             console.log('Tutorial onStart called');
             
-            // Try to start audio first with multiple attempts
-            let audioReady = false;
-            for (let i = 0; i < 5; i++) {
-              audioReady = await startAudio();
-              console.log(`Audio start attempt ${i + 1}: ${audioReady}`);
-              if (audioReady) break;
-              await new Promise(resolve => setTimeout(resolve, 200));
-            }
+            // Try to start audio
+            const audioReady = await startAudio();
+            console.log('Audio ready:', audioReady);
             
-            // Force audio to be ready before playing
-            if (!audioReady) {
-              console.warn('Audio context failed to start automatically');
-              // Set up a click handler for manual start
-              const startOnClick = async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const started = await startAudio();
-                if (started) {
-                  document.removeEventListener('click', startOnClick, true);
-                  // Play demo after audio starts
-                  setTimeout(() => {
-                    if (playSongRef.current) {
-                      playSongRef.current(0, false);
-                    }
-                  }, 100);
-                }
-              };
-              document.addEventListener('click', startOnClick, true);
-            }
-            
-            // If audio is ready, wait a bit then play demo
-            if (audioReady) {
-              setTimeout(() => {
-                console.log('Starting demo playback');
-                console.log('Current refs:', {
-                  playSongRef: !!playSongRef.current,
-                  handleKeyPressRef: !!handleKeyPressRef.current,
-                  handleKeyReleaseRef: !!handleKeyReleaseRef.current,
-                  pianoRef: !!pianoRef.current
-                });
-                if (playSongRef.current) {
-                  console.log('Calling playSong');
-                  playSongRef.current(0, false); // Play demo song once, no loop
-                }
-              }, 1000); // Wait 1 second after audio is ready
-            }
+            // Always try to play the demo after a delay
+            setTimeout(() => {
+              console.log('Starting demo playback');
+              console.log('Current refs:', {
+                playSongRef: !!playSongRef.current,
+                handleKeyPressRef: !!handleKeyPressRef.current,
+                handleKeyReleaseRef: !!handleKeyReleaseRef.current,
+                pianoRef: !!pianoRef.current,
+                audioStarted: audioStarted
+              });
+              
+              if (playSongRef.current) {
+                console.log('Calling playSong');
+                playSongRef.current(0, false); // Play demo song once, no loop
+              }
+            }, 500); // Give time for everything to initialize
           }}
         />
       )}
