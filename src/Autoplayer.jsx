@@ -35,7 +35,17 @@ export function useAutoplayer(handleKeyPressRef, handleKeyReleaseRef, keyDataArr
   }, [keyDataArray, handleKeyReleaseRef]);
 
   const playSong = useCallback((songIndex = 0, shouldLoop = true) => {
-    if (autoPlaying) return; // Ignore if already playing
+    // Clear any existing playback
+    clearAllTimeouts();
+    
+    // Release all currently playing notes
+    activeNotesRef.current.forEach(noteName => {
+      const keyObj = keyDataArray.find(k => k.note === noteName);
+      if (keyObj && handleKeyReleaseRef.current) {
+        handleKeyReleaseRef.current(keyObj);
+      }
+    });
+    activeNotesRef.current.clear();
 
     const song = SONGS[songIndex];
     if (!song) return;
@@ -91,7 +101,7 @@ export function useAutoplayer(handleKeyPressRef, handleKeyReleaseRef, keyDataArr
 
       noteTimeoutsRef.current.push(pressId, releaseId);
     });
-  }, [autoPlaying, keyDataArray, handleKeyPressRef, handleKeyReleaseRef]);
+  }, [keyDataArray, handleKeyPressRef, handleKeyReleaseRef]);
 
   // Clear timers and release notes on unmount
   useEffect(() => {

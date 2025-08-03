@@ -1410,33 +1410,22 @@ function MusicolourApp() {
             }
           }}
           onStart={async () => {
-            // Try to start audio multiple times
-            let audioReady = await startAudio();
+            console.log('Tutorial onStart called');
             
-            // If audio failed, set up a document-wide listener
-            if (!audioReady) {
-              const startOnInteraction = async () => {
-                audioReady = await startAudio();
-                if (audioReady) {
-                  document.removeEventListener('click', startOnInteraction);
-                  document.removeEventListener('touchstart', startOnInteraction);
-                  document.removeEventListener('keydown', startOnInteraction);
-                  // Start the demo after audio is ready
-                  playSongRef.current(0, false);
-                }
-              };
-              
-              document.addEventListener('click', startOnInteraction, { once: true });
-              document.addEventListener('touchstart', startOnInteraction, { once: true });
-              document.addEventListener('keydown', startOnInteraction, { once: true });
-            }
+            // Try to start audio
+            const audioReady = await startAudio();
+            console.log('Audio ready:', audioReady);
             
-            // If audio is ready, start demo immediately
-            if (audioReady) {
-              setTimeout(() => {
+            // Always try to play the demo after a delay
+            setTimeout(() => {
+              console.log('Attempting to play demo song');
+              if (playSongRef.current) {
+                console.log('playSongRef.current exists, calling it');
                 playSongRef.current(0, false); // Play demo song once, no loop
-              }, 100);
-            }
+              } else {
+                console.error('playSongRef.current is null!');
+              }
+            }, 500); // Give more time for initialization
           }}
         />
       )}
