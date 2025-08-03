@@ -585,10 +585,14 @@ function MusicolourApp() {
     
     const playNextNote = () => {
       if (noteIndex >= notes.length) {
-        console.log('MIDI playback completed, looping...');
-        // Loop the MIDI file
-        noteIndex = 0;
-        playMidiFile(notes);
+        console.log('MIDI playback completed');
+        // Clean up when playback is complete
+        if (window.midiFileCleanup) {
+          const index = window.midiFileCleanup.indexOf(cleanup);
+          if (index > -1) {
+            window.midiFileCleanup.splice(index, 1);
+          }
+        }
         return;
       }
       
@@ -605,9 +609,9 @@ function MusicolourApp() {
         if (keyMapping) {
           const pianoKey = PIANO_KEYS.find(k => k.note === keyMapping);
           if (pianoKey) {
-            // Simulate key press
+            // Simulate key press with fromMidiFile flag
             if (handleKeyPressRef.current) {
-              handleKeyPressRef.current(pianoKey);
+              handleKeyPressRef.current(pianoKey, note.velocity, true);
               
               // Release after a short duration
               const releaseDuration = 100 + note.velocity * 200;
@@ -827,8 +831,15 @@ function MusicolourApp() {
     return () => clearInterval(decayInterval);
   }, []);
 
-  const handleKeyPress = useCallback(async (key, midiVelocity = null) => {
+  const handleKeyPress = useCallback(async (key, midiVelocity = null, fromMidiFile = false) => {
     if (pressedKeys.has(key.note)) return;
+    
+    // Stop any MIDI file playback when user plays manually (not from MIDI file itself)
+    if (!fromMidiFile && window.midiFileCleanup && window.midiFileCleanup.length > 0) {
+      console.log('Stopping MIDI file playback due to manual key press');
+      window.midiFileCleanup.forEach(cleanup => cleanup());
+      window.midiFileCleanup = [];
+    }
     
     // Start audio on first interaction
     await startAudio();

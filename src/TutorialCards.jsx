@@ -72,6 +72,10 @@ const CARDS = [
           <span>Model parameters</span>
         </div>
         <div className="flex items-center gap-3">
+          <kbd className="px-2 py-1 bg-white bg-opacity-20 rounded text-base font-mono">Shift + D</kbd>
+          <span>Debug metrics</span>
+        </div>
+        <div className="flex items-center gap-3">
           <kbd className="px-2 py-1 bg-white bg-opacity-20 rounded text-base font-mono">Shift + P</kbd>
           <span>Load MIDI file</span>
         </div>
