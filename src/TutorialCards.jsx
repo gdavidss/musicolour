@@ -6,7 +6,7 @@ const CARDS = [
     content: (
       <div className="space-y-4">
         <p className="text-4xl font-light">Welcome to Musicolour</p>
-        <p className="text-xl text-gray-300">Click anywhere to start the demo</p>
+        <p className="text-xl text-gray-300">A demo is playing to show you how it works</p>
       </div>
     )
   },
@@ -120,6 +120,14 @@ export function TutorialCards({ onComplete, onSkip, onStart }) {
     }
   };
 
+  // Auto-start the demo when tutorial mounts
+  useEffect(() => {
+    if (!hasStarted && onStart && currentCardIndex === 0) {
+      setHasStarted(true);
+      onStart();
+    }
+  }, [hasStarted, onStart, currentCardIndex]);
+
   useEffect(() => {
     // Component initialization
     
@@ -208,8 +216,7 @@ export function TutorialCards({ onComplete, onSkip, onStart }) {
           padding: '48px',
           maxWidth: '800px',
           textAlign: 'center',
-          textShadow: '0 2px 20px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.9)',
-          cursor: currentCardIndex === 0 && !hasStarted ? 'pointer' : 'default'
+          textShadow: '0 2px 20px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.9)'
         }}
       >
       <div>

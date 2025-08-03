@@ -737,7 +737,6 @@ function MusicolourApp() {
       if (event.code === 'KeyM' && event.shiftKey) {
         setShowTutorial(true);
         setShowKeyboard(true); // Show keyboard during tutorial replay
-        // Don't auto-play - wait for user interaction
         return;
       }
 
@@ -1046,7 +1045,6 @@ function MusicolourApp() {
     if (!hasSeenTutorial) {
       setShowTutorial(true);
       setShowKeyboard(true); // Show keyboard during tutorial
-      // Don't auto-play - wait for user interaction to start audio
     }
   }, []); // Empty dependency array - run only once on mount
 
