@@ -734,6 +734,7 @@ function MusicolourApp() {
   // early "loaded === false" check that previously forced the app to stay on
   // the low-polyphony fallback and lose notes when playing chords.
   useEffect(() => {
+    console.log('Initializing piano...');
     // 1) Create a 16-voice fallback synth so users can play immediately.
     const fallbackSynth = new Tone.PolySynth(Tone.Synth, {
       maxPolyphony: 16,
@@ -744,6 +745,7 @@ function MusicolourApp() {
 
     // Set as the current instrument.
     pianoRef.current = fallbackSynth;
+    console.log('Piano initialized with fallback synth');
 
     // 2) Begin loading the multi-sample piano. When ready, swap it in and
     // dispose the fallback to free resources.
@@ -898,16 +900,27 @@ function MusicolourApp() {
     return () => clearInterval(decayInterval);
   }, []);
 
-  const handleKeyPress = useCallback(async (key, midiVelocity = null) => {
+  const handleKeyPress = useCallback((key, midiVelocity = null) => {
     if (pressedKeys.has(key.note)) return;
     
-    // Start audio on first interaction
-    await startAudio();
+    console.log(`handleKeyPress called for ${key.note}, audioStarted: ${audioStarted}, pianoRef: ${!!pianoRef.current}`);
+    
+    // Start audio on first interaction (but don't block)
+    if (!audioStarted) {
+      startAudio().catch(err => console.log('Audio start failed:', err));
+    }
     
     setPressedKeys(prev => new Set([...prev, key.note]));
     
     if (pianoRef.current) {
-      pianoRef.current.triggerAttack(key.note);
+      console.log(`Triggering attack for ${key.note}`);
+      try {
+        pianoRef.current.triggerAttack(key.note);
+      } catch (err) {
+        console.error(`Error triggering attack for ${key.note}:`, err);
+      }
+    } else {
+      console.error('pianoRef.current is null when trying to play note:', key.note);
     }
 
     const noteIndex = PIANO_KEYS.findIndex(k => k.note === key.note);
@@ -917,6 +930,7 @@ function MusicolourApp() {
     updateSystemExcitement(noteIndex, velocity);
     
     // Trigger fluid splats based on excitement level
+    console.log('Checking fluid trigger, fluidCanvasRef:', !!fluidCanvasRef.current);
     if (fluidCanvasRef.current) {
       const currentState = systemStateRef.current;
       
@@ -932,20 +946,21 @@ function MusicolourApp() {
         numSplats = 2;
       }
       
-      // console.log('Triggering splats:', {
-      //   excitement: currentState.excitement,
-      //   numSplats,
-      //   musicalityScore: currentState.musicalityScore
-      // });
+      console.log('Triggering splats:', {
+        excitement: currentState.excitement,
+        numSplats,
+        musicalityScore: currentState.musicalityScore
+      });
       
       // Trigger multiple splats
       for (let i = 0; i < numSplats; i++) {
         fluidCanvasRef.current.triggerSplat(currentState.excitement);
       }
+      console.log(`Triggered ${numSplats} splats`);
     } else {
       console.warn('fluidCanvasRef.current is null');
     }
-  }, [pressedKeys, updateSystemExcitement, startAudio]);
+  }, [pressedKeys, updateSystemExcitement, startAudio, audioStarted]);
 
   const handleKeyRelease = useCallback((key) => {
     setPressedKeys(prev => {
@@ -1412,20 +1427,52 @@ function MusicolourApp() {
           onStart={async () => {
             console.log('Tutorial onStart called');
             
-            // Try to start audio
-            const audioReady = await startAudio();
-            console.log('Audio ready:', audioReady);
+            // Try to start audio first with multiple attempts
+            let audioReady = false;
+            for (let i = 0; i < 5; i++) {
+              audioReady = await startAudio();
+              console.log(`Audio start attempt ${i + 1}: ${audioReady}`);
+              if (audioReady) break;
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
             
-            // Always try to play the demo after a delay
-            setTimeout(() => {
-              console.log('Attempting to play demo song');
-              if (playSongRef.current) {
-                console.log('playSongRef.current exists, calling it');
-                playSongRef.current(0, false); // Play demo song once, no loop
-              } else {
-                console.error('playSongRef.current is null!');
-              }
-            }, 500); // Give more time for initialization
+            // Force audio to be ready before playing
+            if (!audioReady) {
+              console.warn('Audio context failed to start automatically');
+              // Set up a click handler for manual start
+              const startOnClick = async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const started = await startAudio();
+                if (started) {
+                  document.removeEventListener('click', startOnClick, true);
+                  // Play demo after audio starts
+                  setTimeout(() => {
+                    if (playSongRef.current) {
+                      playSongRef.current(0, false);
+                    }
+                  }, 100);
+                }
+              };
+              document.addEventListener('click', startOnClick, true);
+            }
+            
+            // If audio is ready, wait a bit then play demo
+            if (audioReady) {
+              setTimeout(() => {
+                console.log('Starting demo playback');
+                console.log('Current refs:', {
+                  playSongRef: !!playSongRef.current,
+                  handleKeyPressRef: !!handleKeyPressRef.current,
+                  handleKeyReleaseRef: !!handleKeyReleaseRef.current,
+                  pianoRef: !!pianoRef.current
+                });
+                if (playSongRef.current) {
+                  console.log('Calling playSong');
+                  playSongRef.current(0, false); // Play demo song once, no loop
+                }
+              }, 1000); // Wait 1 second after audio is ready
+            }
           }}
         />
       )}

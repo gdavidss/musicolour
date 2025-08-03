@@ -60,9 +60,19 @@ export function useAutoplayer(handleKeyPressRef, handleKeyReleaseRef, keyDataArr
       // Schedule note press
       const pressId = setTimeout(() => {
         const keyObj = keyDataArray.find(k => k.note === noteName);
+        console.log(`Autoplayer: Playing note ${noteName}, keyObj:`, keyObj, 'handleKeyPressRef.current:', !!handleKeyPressRef.current);
         if (keyObj && handleKeyPressRef.current) {
-          handleKeyPressRef.current(keyObj, 0.8);
-          activeNotesRef.current.add(noteName); // Track active note
+          try {
+            handleKeyPressRef.current(keyObj, 0.8);
+            activeNotesRef.current.add(noteName); // Track active note
+            console.log(`Autoplayer: Successfully triggered note ${noteName}`);
+          } catch (err) {
+            console.error(`Autoplayer: Error playing note ${noteName}:`, err);
+          }
+        } else if (!keyObj) {
+          console.error(`Autoplayer: Could not find key for note ${noteName}`);
+        } else if (!handleKeyPressRef.current) {
+          console.error('Autoplayer: handleKeyPressRef.current is null!');
         }
       }, idx * beatMs);
 
