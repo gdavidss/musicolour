@@ -365,28 +365,13 @@ function MusicolourApp() {
     }
   });
 
-  // Start audio context with various strategies
+  // Start audio context on first user interaction
   const startAudio = useCallback(async () => {
     if (!audioStarted) {
-      try {
-        // Start Tone.js audio context
-        await Tone.start();
-        
-        // Check if context is running
-        if (Tone.context.state === 'running') {
-          setAudioStarted(true);
-          console.log('Audio context started successfully');
-          return true;
-        } else {
-          console.log('Audio context state:', Tone.context.state);
-          return false;
-        }
-      } catch (error) {
-        console.log('Audio start failed, will retry on user interaction:', error);
-        return false;
-      }
+      await Tone.start();
+      setAudioStarted(true);
+      console.log('Audio context started');
     }
-    return true;
   }, [audioStarted]);
   
   // Use ref to access current state in callbacks
@@ -394,22 +379,6 @@ function MusicolourApp() {
   useEffect(() => {
     systemStateRef.current = systemState;
   }, [systemState]);
-
-  // Store startAudio in a ref to avoid effect dependencies
-  const startAudioRef = useRef(startAudio);
-  useEffect(() => {
-    startAudioRef.current = startAudio;
-  }, [startAudio]);
-
-  // Attempt to start audio context once on mount
-  useEffect(() => {
-    // Try once after a short delay
-    setTimeout(() => {
-      if (!audioStarted) {
-        startAudio();
-      }
-    }, 100);
-  }, []); // Empty deps - only run once
 
   const pianoRef = useRef(null);
 
@@ -768,6 +737,7 @@ function MusicolourApp() {
       if (event.code === 'KeyM' && event.shiftKey) {
         setShowTutorial(true);
         setShowKeyboard(true); // Show keyboard during tutorial replay
+        // Don't auto-play - wait for user interaction
         return;
       }
 
@@ -857,13 +827,11 @@ function MusicolourApp() {
     return () => clearInterval(decayInterval);
   }, []);
 
-  const handleKeyPress = useCallback((key, midiVelocity = null) => {
+  const handleKeyPress = useCallback(async (key, midiVelocity = null) => {
     if (pressedKeys.has(key.note)) return;
     
-    // Start audio on first interaction (but don't block)
-    if (!audioStarted) {
-      startAudio();
-    }
+    // Start audio on first interaction
+    await startAudio();
     
     setPressedKeys(prev => new Set([...prev, key.note]));
     
@@ -893,12 +861,20 @@ function MusicolourApp() {
         numSplats = 2;
       }
       
+      // console.log('Triggering splats:', {
+      //   excitement: currentState.excitement,
+      //   numSplats,
+      //   musicalityScore: currentState.musicalityScore
+      // });
+      
       // Trigger multiple splats
       for (let i = 0; i < numSplats; i++) {
         fluidCanvasRef.current.triggerSplat(currentState.excitement);
       }
+    } else {
+      console.warn('fluidCanvasRef.current is null');
     }
-  }, [pressedKeys, updateSystemExcitement, startAudio, audioStarted]);
+  }, [pressedKeys, updateSystemExcitement, startAudio]);
 
   const handleKeyRelease = useCallback((key) => {
     setPressedKeys(prev => {
@@ -1070,41 +1046,7 @@ function MusicolourApp() {
     if (!hasSeenTutorial) {
       setShowTutorial(true);
       setShowKeyboard(true); // Show keyboard during tutorial
-      
-      // Track if demo has started
-      let demoStarted = false;
-      
-      // Set up global interaction listener to start demo
-      const startDemoOnInteraction = async (e) => {
-        // Prevent triggering multiple times
-        if (demoStarted) return;
-        demoStarted = true;
-        
-        // Remove all listeners
-        document.removeEventListener('click', startDemoOnInteraction, true);
-        document.removeEventListener('touchstart', startDemoOnInteraction, true);
-        document.removeEventListener('keydown', startDemoOnInteraction, true);
-        
-        // Start audio and play demo
-        const audioReady = await startAudioRef.current();
-        if (audioReady && playSongRef.current) {
-          setTimeout(() => {
-            playSongRef.current(0, false); // Play demo once
-          }, 100);
-        }
-      };
-      
-      // Add listeners to entire document with capture phase
-      document.addEventListener('click', startDemoOnInteraction, true);
-      document.addEventListener('touchstart', startDemoOnInteraction, true);
-      document.addEventListener('keydown', startDemoOnInteraction, true);
-      
-      // Cleanup function
-      return () => {
-        document.removeEventListener('click', startDemoOnInteraction, true);
-        document.removeEventListener('touchstart', startDemoOnInteraction, true);
-        document.removeEventListener('keydown', startDemoOnInteraction, true);
-      };
+      // Don't auto-play - wait for user interaction to start audio
     }
   }, []); // Empty dependency array - run only once on mount
 
@@ -1388,7 +1330,13 @@ function MusicolourApp() {
               window.midiFileCleanup = [];
             }
           }}
-
+          onStart={async () => {
+            await startAudio();
+            // Start demo song after audio context is ready
+            setTimeout(() => {
+              playSongRef.current(0, false); // Play demo song once, no loop
+            }, 100);
+          }}
         />
       )}
 
