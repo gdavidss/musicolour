@@ -712,6 +712,43 @@ function MusicolourApp() {
 
   // Keyboard event handling
   useEffect(() => {
+    const openMidiFileDialog = (ev) => {
+      try {
+        if (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+        const input = fileInputRef.current;
+        if (!input) return;
+        try { input.focus({ preventScroll: true }); } catch {}
+        // Prefer the modern picker API when available
+        if (typeof input.showPicker === 'function') {
+          input.showPicker();
+        } else {
+          input.click();
+        }
+      } catch (err) {
+        // Robust fallback: create a temporary input and trigger it
+        const tmp = document.createElement('input');
+        tmp.type = 'file';
+        tmp.accept = '.mid,.midi';
+        tmp.style.position = 'fixed';
+        tmp.style.left = '-9999px';
+        tmp.style.width = '1px';
+        tmp.style.height = '1px';
+        document.body.appendChild(tmp);
+        const cleanup = () => {
+          if (tmp && tmp.parentNode) tmp.parentNode.removeChild(tmp);
+        };
+        tmp.addEventListener('change', () => {
+          // Reuse existing loader
+          handleMidiFileLoad({ target: tmp });
+          cleanup();
+        }, { once: true });
+        try { tmp.click(); } finally {}
+      }
+    };
+
     const handleKeyDown = (event) => {
       // Toggle debug with 'D' key
       if (event.code === 'KeyD' && event.shiftKey) {
@@ -747,8 +784,7 @@ function MusicolourApp() {
 
       // Open MIDI file with Shift + P
       if (event.code === 'KeyP' && event.shiftKey) {
-        event.preventDefault();
-        fileInputRef.current?.click();
+        openMidiFileDialog(event);
         return;
       }
       
@@ -1432,7 +1468,15 @@ function MusicolourApp() {
         type="file"
         accept=".mid,.midi"
         onChange={handleMidiFileLoad}
-        style={{ display: 'none' }}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '1px',
+          height: '1px',
+          opacity: 0,
+          pointerEvents: 'none'
+        }}
       />
     </div>
   );
