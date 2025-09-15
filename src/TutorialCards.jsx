@@ -50,7 +50,7 @@ const CARDS = [
     id: 'conversation',
     content: (
       <p className="text-3xl font-light leading-relaxed">
-        You're having a <a href="https://falso.net/sfcs" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">conversation</a><br />with a machine through music
+        You're having a <a href="https://en.wikipedia.org/wiki/Conversation_theory" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">conversation</a><br />with a machine through music
       </p>
     )
   },

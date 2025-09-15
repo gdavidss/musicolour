@@ -1225,7 +1225,7 @@ function MusicolourApp() {
         <div className="text-xs text-gray-300 mt-1">
           Made for the <span className="italic">
             <a
-              href="https://partiful.com/e/KAyicRaedj3ORP1WfCsk"
+              href="https://falso.net/sfcs"
               target="_blank"
               rel="noopener noreferrer"
               className="underline hover:text-blue-300"
